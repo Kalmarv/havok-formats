@@ -7,17 +7,24 @@
 //! | offset | field | check |
 //! |---|---|---|
 //! | `0x00` | magic `57 E0 E0 57 10 C0 C0 10` | exact |
+//! | `0x08` | user tag, kept in [`Packfile::user_tag`] | read, not interpreted (0 in every file) |
 //! | `0x0C` | file version | 7 |
 //! | `0x10` | layout rules: pointer size, little-endian flag, reuse-padding, empty-base-optimisation | `4, 0, 1, 1` |
 //! | `0x14` | section count | headers fit the file |
 //! | `0x18`, `0x1C` | contents section index and offset (the root object) | the data section; a virtual-fixup target |
 //! | `0x20`, `0x24` | class-name section index and the root's class-name offset | the class-name section; a listed name |
 //! | `0x28` | contents version, 16 bytes, NUL-terminated | `Havok-7.1.0-r1` |
-//! | `0x38`, `0x3C` | two `0xFFFFFFFF` words, kept in [`Packfile::flags`] | read, not interpreted |
+//! | `0x38`, `0x3C` | two filler words, kept in [`Packfile::filler`] | read, not interpreted (`0xFFFFFFFF` in every file) |
 //! | `0x40 + 48 i` | section header: tag (20 bytes), then `start, local, global, virtual, exports, imports, end` | in order, inside the file |
 //!
-//! `__classnames__` holds `u32 signature, 0x09, name\0` entries (then `0xFF` padding). `__types__` is empty: there is no
-//! reflection, so class layouts live in [`physics`], stated per SDK version and confirmed on the data. `__data__` holds the
+//! In version 7 the two words at `0x38` hold no value (`0xFFFFFFFF` in every file). Readers of later versions read a
+//! flags word at `0x38` and two 16-bit predicate fields at `0x3C` and `0x3E` there; this reader refuses those versions.
+//!
+//! `__classnames__` holds `u32 signature, 0x09, name\0` entries (then `0xFF` padding). A signature is a CRC-32 of the
+//! class's member list (and its ancestors'), so it names the class definition the file was written against; each of
+//! the 24 names in the corpus has one signature, listed in [`CLASS_SIGNATURES`], and a file that stores another
+//! signature for one of those names is refused. `__types__` is empty: there is no reflection, so class layouts live in
+//! [`physics`], stated per SDK version and confirmed on the data. `__data__` holds the
 //! objects; its fixups are local `{src,dst}`, global `{src,section,dst}` and virtual `{src,section,class-name offset}`,
 //! each list ending at `0xFFFFFFFF` (the rest of its range is `0xFFFFFFFF` padding). An *object* is a virtual-fixup target;
 //! it extends to the next one (arrays and strings that follow belong to it). A pointer slot is non-null iff it has a local
@@ -37,6 +44,35 @@ pub mod physics;
 
 /// The contents version this reader knows.
 pub const CONTENTS_VERSION: &str = "Havok-7.1.0-r1";
+/// Every class name of the 490 Tony Hawk's SHRED packfiles with the one signature each stores for it in every file that
+/// lists it. A file storing another signature for one of these names was written against another definition of the
+/// class, so [`Packfile::read`] refuses it; a name not listed here is kept with its signature, unchecked.
+pub const CLASS_SIGNATURES: [(&str, u32); 24] = [
+    ("hkClass", 0x1442_5E51),
+    ("hkClassMember", 0x4A98_6551),
+    ("hkClassEnum", 0x8A36_09CF),
+    ("hkClassEnumItem", 0xCE6F_8A6C),
+    ("hkRootLevelContainer", 0x2772_C11E),
+    ("hkpPhysicsData", 0xC2A4_61E4),
+    ("hkpPhysicsSystem", 0xFF72_4C17),
+    ("hkpRigidBody", 0xAA8C_3B19),
+    ("hkpMoppBvTreeShape", 0x90B2_9D39),
+    ("hkpMoppCode", 0x924C_2661),
+    ("hkpStorageExtendedMeshShape", 0x3D52_E7D2),
+    ("hkpStorageExtendedMeshShapeMeshSubpartStorage", 0x5AAD_4DE6),
+    ("hkpConvexVerticesShape", 0x4E8A_B2B7),
+    ("hkpConvexVerticesConnectivity", 0x63D3_8E9C),
+    ("hkpConvexTranslateShape", 0x5BA0_A5F7),
+    ("hkpBoxShape", 0x3444_D2D5),
+    ("hkpCylinderShape", 0x3E46_3C3A),
+    ("hkpSphereShape", 0x0795_D9FA),
+    ("hkpCapsuleShape", 0xDD0B_1FD3),
+    ("hkpListShape", 0xA193_7CBD),
+    ("hkpConstraintInstance", 0x4FB4_E6BB),
+    ("hkpRagdollConstraintData", 0x17A4_D42F),
+    ("hkpLimitedHingeConstraintData", 0x1C56_6B11),
+    ("hkpBreakableConstraintData", 0x7034_BDB6),
+];
 const MAGIC: [u8; 8] = [0x57, 0xE0, 0xE0, 0x57, 0x10, 0xC0, 0xC0, 0x10];
 const SECTION_HEADER: usize = 48;
 const FIRST_SECTION: usize = 0x40;
@@ -73,6 +109,17 @@ pub struct Object {
     class: usize,
 }
 
+/// One `__classnames__` entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassName {
+    /// The class name.
+    pub name: String,
+    /// The class signature stored before it.
+    pub signature: u32,
+    /// Offset of the name in the class-name section (what virtual fixups name).
+    offset: usize,
+}
+
 /// A hkArray header: element pointer (None when null) and element count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Array {
@@ -90,9 +137,11 @@ pub struct Packfile<'a> {
     bytes: &'a [u8],
     /// The section headers, in file order.
     pub sections: Vec<Section>,
-    /// The two `0xFFFFFFFF` words at `0x38` and `0x3C`, as stored.
-    pub flags: [u32; 2],
-    classes: Vec<(usize, String)>,
+    /// The user tag at `0x08`, as stored.
+    pub user_tag: u32,
+    /// The two filler words at `0x38` and `0x3C`, as stored (`0xFFFFFFFF` in every version 7 file).
+    pub filler: [u32; 2],
+    classes: Vec<ClassName>,
     data_start: usize,
     data_len: usize,
     local: Vec<(usize, usize)>,
@@ -163,7 +212,11 @@ impl<'a> Packfile<'a> {
                 ),
             ));
         }
-        let flags = [u32_at(0x38, "the flags")?, u32_at(0x3C, "the predicate word")?];
+        let user_tag = u32_at(0x08, "the user tag")?;
+        let filler = [
+            u32_at(0x38, "the header filler")?,
+            u32_at(0x3C, "the header filler")?,
+        ];
         let count = usize_at(0x14, "the section count")?;
         let table_end = count
             .checked_mul(SECTION_HEADER)
@@ -252,6 +305,7 @@ impl<'a> Packfile<'a> {
         // an entry is `u32 signature, 0x09, name, NUL`; the signature may start with any byte, so the separator decides
         while class_bytes.get(at..).unwrap_or_default().get(4) == Some(&9) {
             let here = sum(class_header.start, class_header.start, at)?;
+            let signature = u32_at(here, "a class signature")?;
             let name_at = sum(here, at, 5)?;
             let tail = class_bytes.get(name_at..).unwrap_or_default();
             let len = tail
@@ -260,7 +314,22 @@ impl<'a> Packfile<'a> {
                 .ok_or_else(|| invalid(here, "class name is not terminated"))?;
             let name = std::str::from_utf8(tail.get(..len).unwrap_or_default())
                 .map_err(|_| invalid(here, "class name is not text"))?;
-            classes.push((name_at, name.to_string()));
+            if let Some((_, want)) = CLASS_SIGNATURES
+                .iter()
+                .find(|(known, want)| *known == name && *want != signature)
+            {
+                return Err(invalid(
+                    here,
+                    format!(
+                        "class {name} has signature {signature:#010x}, not the {want:#010x} of the {CONTENTS_VERSION} class this reader knows"
+                    ),
+                ));
+            }
+            classes.push(ClassName {
+                name: name.to_string(),
+                signature,
+                offset: name_at,
+            });
             at = name_at.saturating_add(len).saturating_add(1);
         }
         if class_bytes
@@ -361,7 +430,7 @@ impl<'a> Packfile<'a> {
                     format!("virtual fixup names section {sec}, not the class names"),
                 ));
             }
-            let class = classes.binary_search_by_key(&name, |(o, _)| *o).map_err(|_| {
+            let class = classes.binary_search_by_key(&name, |c| c.offset).map_err(|_| {
                 invalid(
                     here,
                     format!("virtual fixup class-name offset {name:#x} is not a name"),
@@ -416,7 +485,7 @@ impl<'a> Packfile<'a> {
             .ok()
             .and_then(|i| objects.get(i));
         match root_object.and_then(|o| classes.get(o.class)) {
-            Some((name_at, _)) if *name_at == root_name => {}
+            Some(c) if c.offset == root_name => {}
             _ => {
                 return Err(invalid(
                     0x1C,
@@ -427,7 +496,8 @@ impl<'a> Packfile<'a> {
         Ok(Self {
             bytes,
             sections,
-            flags,
+            user_tag,
+            filler,
             classes,
             data_start,
             data_len,
@@ -450,7 +520,12 @@ impl<'a> Packfile<'a> {
 
     /// The class name of `object`.
     pub fn class_name(&self, object: &Object) -> &str {
-        self.classes.get(object.class).map_or("", |(_, n)| n.as_str())
+        self.classes.get(object.class).map_or("", |c| c.name.as_str())
+    }
+
+    /// The `__classnames__` entries, in file order.
+    pub fn class_names(&self) -> &[ClassName] {
+        &self.classes
     }
 
     /// Offsets of the objects of class `name`, in data order.

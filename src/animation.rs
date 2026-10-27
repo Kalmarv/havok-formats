@@ -47,23 +47,25 @@ pub struct Skeleton {
     pub float_slots: Vec<String>,
 }
 
-/// `hkaAnimation::AnimationType`, as the file's `type` field.
+/// `hkaAnimation::AnimationType`, as the file's `type` field, numbered as the 2014 and later SDKs number it (the
+/// tagfiles this crate reads); older SDKs number it differently (spline compressed is 5 in 2010). The class name,
+/// not this value, decides how an animation is read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimationType {
-    /// Value 0.
+    /// Value 0: unknown.
     Unknown,
     /// Value 1: `hkaInterleavedUncompressedAnimation`.
     Interleaved,
-    /// Value 2.
+    /// Value 2: `hkaMirroredAnimation`.
     Mirrored,
     /// Value 3: `hkaSplineCompressedAnimation`.
     SplineCompressed,
-    /// Value 4.
+    /// Value 4: `hkaQuantizedAnimation`.
     Quantized,
-    /// Value 5.
+    /// Value 5: `hkaPredictiveCompressedAnimation`.
     Predictive,
-    /// Value 6.
-    ReferenceFrame,
+    /// Value 6: `hkaReferencePoseAnimation`, the reference pose as an animation.
+    ReferencePose,
     /// A value the SDK's enumeration does not have.
     Other(u32),
 }
@@ -77,7 +79,7 @@ impl AnimationType {
             3 => AnimationType::SplineCompressed,
             4 => AnimationType::Quantized,
             5 => AnimationType::Predictive,
-            6 => AnimationType::ReferenceFrame,
+            6 => AnimationType::ReferencePose,
             other => AnimationType::Other(other),
         }
     }

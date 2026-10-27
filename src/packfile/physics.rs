@@ -1,34 +1,43 @@
 //! Havok 7.1.0-r1 physics class views over a [`Packfile`] (4-byte pointers, big endian). The level packfiles carry no
-//! reflection (`__types__` is empty), so every member offset below is stated from the 7.1 member order (SDK source
-//! order, `hkVector4` members 16-aligned) and **confirmed on the data**: the last column names the check that held on
-//! all 490 SHRED files (12,789 bodies, 1,758 extended meshes, 6,445 subparts, 646,081 triangles, 8,780 convex shapes).
-//! A layout that does not hold is an error naming the offset, never a guess.
+//! reflection (`__types__` is empty), so every member offset below is stated from the 7.1 member order (`hkVector4`
+//! members 16-aligned) and **confirmed on the data**: the last column names the check that held on all 490 SHRED files
+//! (12,789 bodies, 1,758 extended meshes, 6,445 subparts, 646,081 triangles, 8,780 convex shapes). The member lists
+//! are the ones whose class signatures every file stores ([`super::CLASS_SIGNATURES`]; [`Packfile::read`] refuses a
+//! class whose signature differs). A layout that does not hold is an error naming the offset, never a guess.
 //!
 //! | class | member | offset | confirmed by |
 //! |---|---|---|---|
 //! | hkpRigidBody | shape pointer | `+0x10` | never null; its class is a known shape |
 //! | | shape key | `+0x14` | `0xFFFFFFFF` in every body |
+//! | | collisionFilterInfo (of the collidable's broad-phase handle) | `+0x2C` | 0, 2, 7, 11, 15 or 18 in the data |
 //! | | name pointer | `+0x74` | C string in every body |
 //! | | material: response type (u8), friction, restitution | `+0x8C`, `+0x90`, `+0x94` | type 1 in every body; finite |
-//! | | collision filter info | `+0xA8` | low 16 bits `0xFFFF` in every body |
+//! | | storageIndex (u16), contactPointCallbackDelay (u16) | `+0xA8`, `+0xAA` | 540 distinct indices from 0; delay `0xFFFF` in every body |
 //! | | motion type (u8) | `+0xE8` | 2, 3 or 5 (sphere inertia, box inertia, fixed); fixed = all 1,758 meshes |
 //! | | rotation, three columns of 16 bytes (xyz used) | `+0xF0` | orthonormal, det +1 in every body |
 //! | | translation | `+0x120` | equals the swept centre `+0x130` unless the body has a centre-of-mass offset |
 //! | hkpMoppBvTreeShape | child shape pointer | `+0x34` | a mesh (1,704) or a list (1) |
-//! | hkpStorageExtendedMeshShape | aabb half extents, centre | `+0x90`, `+0xA0` | every vertex inside (tolerance 0.06) |
+//! | hkpStorageExtendedMeshShape | embeddedTrianglesSubpart (96 B) | `+0x20` | a copy of subpart 0 but for its triangle offset (`+0x4C`, unread) |
+//! | | scaling | `+0x80` | `(1, 1, 1, 1)` in every mesh |
+//! | | aabb half extents, centre | `+0x90`, `+0xA0` | every vertex inside (tolerance 0.06) |
 //! | | numBitsForSubpartIndex | `+0xB0` | 12 |
 //! | | trianglesSubparts (hkArray, 96-byte elements) | `+0xB4` | |
 //! | | weldingInfo (hkArray of u16) | `+0xCC` | length = total triangles |
 //! | | meshStorage (hkArray of pointers) | `+0xF0` | length = subparts; each a MeshSubpartStorage |
-//! | TrianglesSubpart (96 B) | material index striding (u16), material count (u16) | `+0x08` | 2; = storage material count |
+//! | TrianglesSubpart (96 B) | type (u8), materialIndexStridingType (u8), materialStriding (i16) | `+0x00`, `+0x01`, `+0x02` | 0 (triangles), 2 (16-bit indices), 12 |
+//! | | materialIndexStriding (u16), numMaterials (u16) | `+0x08`, `+0x0A` | 2; = storage material count |
 //! | | triangle count, vertex striding, vertex count | `+0x14`, `+0x1C`, `+0x20` | = storage; 16 |
-//! | | index striding, striding type | `+0x44`, `+0x48` | 16 bytes (4 u32 per triangle); `0x03000000` |
+//! | | extrusion (vec4) | `+0x30` | zero |
+//! | | index striding, striding type (u8), flipAlternateTriangles (i8) | `+0x44`, `+0x48`, `+0x49` | 16 bytes (4 u32 per triangle); 3 (32-bit); 0 |
 //! | | triangle offset | `+0x4C` | cumulative triangles of the earlier subparts |
+//! | | userData | `+0x50` | zero |
+//! | | the pointers materialIndexBase, materialBase, materialClass, vertexBase, indexBase | `+0x04`, `+0x0C`, `+0x10`, `+0x18`, `+0x40` | zero (the storage holds the arrays) |
+//! | | every other byte (padding) | | zero |
 //! | MeshSubpartStorage | vertices (hkVector4) | `+0x08` | count = subpart; w ignored |
 //! | | indices8, indices16 | `+0x14`, `+0x20` | empty in every subpart |
 //! | | indices32 | `+0x2C` | 4 per triangle; every index < vertex count; the 4th is 0 |
 //! | | materialIndices8 | `+0x38` | empty |
-//! | | materials (12-byte records `a, b, c`) | `+0x44` | `b == 0x3F80` in every record; `c` is padding |
+//! | | materials (12-byte records: filterInfo u32, restitution and friction as halves, userData) | `+0x44` | halves finite (restitution 0, friction 1 in all 7,909 records) |
 //! | | namedMaterials | `+0x50` | empty |
 //! | | materialIndices16 | `+0x5C` | one per triangle, each < the material count |
 //! | hkpConvexVerticesShape | radius, aabb half extents, centre | `+0x10`, `+0x20`, `+0x30` | every vertex inside the aabb |
@@ -113,12 +122,24 @@ pub fn rigid_bodies(pack: &Packfile<'_>) -> Vec<usize> {
     pack.objects_of("hkpRigidBody").collect()
 }
 
-/// Motion types seen in the data (Havok's `hkpMotion::MotionType`: 2 sphere inertia, 3 box inertia, 5 fixed).
+/// `hkpMotion::MotionType` 0: invalid. The values are 7.1's (the enum is part of the `hkpRigidBody` signature the
+/// files store); other Havok versions and other engines number motions differently. The data holds only 2, 3 and 5,
+/// and [`RigidBody::read`] accepts only those.
+pub const MOTION_INVALID: u8 = 0;
+/// Motion type 1: dynamic.
+pub const MOTION_DYNAMIC: u8 = 1;
+/// Motion type 2: sphere inertia.
 pub const MOTION_SPHERE_INERTIA: u8 = 2;
 /// Motion type 3: box inertia.
 pub const MOTION_BOX_INERTIA: u8 = 3;
+/// Motion type 4: keyframed.
+pub const MOTION_KEYFRAMED: u8 = 4;
 /// Motion type 5: fixed.
 pub const MOTION_FIXED: u8 = 5;
+/// Motion type 6: thin box inertia.
+pub const MOTION_THIN_BOX_INERTIA: u8 = 6;
+/// Motion type 7: character.
+pub const MOTION_CHARACTER: u8 = 7;
 
 /// An `hkpRigidBody`: where it is, what it is named and the shape it carries.
 #[derive(Debug, Clone, PartialEq)]
@@ -135,8 +156,10 @@ pub struct RigidBody {
     pub friction: f32,
     /// Material restitution.
     pub restitution: f32,
-    /// High 16 bits: group; low 16 bits are `0xFFFF` in the data.
+    /// The collidable's `collisionFilterInfo` (its broad-phase handle's, at `+0x2C`), kept whole.
     pub collision_filter_info: u32,
+    /// `storageIndex` (`+0xA8`): the body's index in its storage, as stored.
+    pub storage_index: u16,
     /// `hkpMotion::MotionType`; 2, 3 or 5 are accepted.
     pub motion_type: u8,
     /// Rotation as three columns: `world = x*c0 + y*c1 + z*c2 + translation`.
@@ -159,9 +182,8 @@ impl RigidBody {
         }
         let name = pack.c_string(pack.target(at(0x74)?, "rigid body name")?)?;
         let response_type = pack.u8(at(0x8C)?)?;
-        let filter = pack.u32(at(0xA8)?)?;
-        if filter & 0xFFFF != 0xFFFF {
-            return Err(pack.err(at(0xA8)?, "collision filter info low half is not 0xFFFF"));
+        if pack.u16(at(0xAA)?)? != 0xFFFF {
+            return Err(pack.err(at(0xAA)?, "contactPointCallbackDelay is not 0xFFFF"));
         }
         let motion_type = pack.u8(at(0xE8)?)?;
         if ![MOTION_SPHERE_INERTIA, MOTION_BOX_INERTIA, MOTION_FIXED].contains(&motion_type) {
@@ -198,7 +220,8 @@ impl RigidBody {
             response_type,
             friction: pack.f32(at(0x90)?)?,
             restitution: pack.f32(at(0x94)?)?,
-            collision_filter_info: filter,
+            collision_filter_info: pack.u32(at(0x2C)?)?,
+            storage_index: pack.u16(at(0xA8)?)?,
             motion_type,
             rotation,
             translation: pack.floats::<3>(at(0x120)?)?,
@@ -217,16 +240,29 @@ impl RigidBody {
     }
 }
 
-/// One triangle material record: `a` is the whole per-triangle word (kept intact; bits 3..=8 are a surface id, the
-/// other bits are opaque flags), `b` is `0x3F80` in all data, `c` is padding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One triangle material record (`hkpStorageExtendedMeshShape::Material`, 12 bytes): `filterInfo`, `restitution` and
+/// `friction` as halves (a half is the top 16 bits of an `f32`), then `userData`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshMaterial {
-    /// The whole per-triangle word.
-    pub a: u32,
-    /// `0x3F80` in all data.
-    pub b: u32,
-    /// Padding.
-    pub c: u32,
+    /// `filterInfo`, the whole per-triangle word (kept intact; bits 3..=8 are a surface id, the other bits are opaque
+    /// flags).
+    pub filter_info: u32,
+    /// `restitution` (0 in all data).
+    pub restitution: f32,
+    /// `friction` (1 in all data).
+    pub friction: f32,
+    /// `userData`, as stored: the writer does not zero it (nonzero in 6,279 of the 7,909 records).
+    pub user_data: u32,
+}
+
+/// The half at `offset` (the top 16 bits of an `f32`) as the `f32` it stands for; a NaN or infinity is an error.
+fn half(pack: &Packfile<'_>, offset: usize) -> Result<f32> {
+    let x = f32::from_bits(u32::from(pack.u16(offset)?) << 16);
+    if x.is_finite() {
+        Ok(x)
+    } else {
+        Err(pack.err(offset, "non-finite half"))
+    }
 }
 
 /// One subpart of an extended mesh: its vertices, triangles and materials.
@@ -243,6 +279,22 @@ pub struct Subpart {
     /// Cumulative triangle count of the earlier subparts.
     pub triangle_offset: usize,
 }
+
+/// The bytes of the 96-byte TrianglesSubpart that hold nothing in the data: the pointers the storage replaces
+/// (materialIndexBase, materialBase, materialClass, vertexBase, indexBase), `extrusion`, `flipAlternateTriangles`,
+/// `userData` and the padding. Each range is zero in all 6,445 subparts.
+const SUBPART_ZERO: [(usize, usize, &str); 6] = [
+    (0x04, 0x08, "materialIndexBase"),
+    (0x0C, 0x14, "materialBase or materialClass"),
+    (0x18, 0x1C, "vertexBase"),
+    (0x24, 0x44, "extrusion, indexBase or padding"),
+    (0x49, 0x4C, "flipAlternateTriangles or padding"),
+    (0x50, 0x60, "userData or padding"),
+];
+/// The size of a TrianglesSubpart.
+const SUBPART: usize = 96;
+/// Where a TrianglesSubpart keeps its triangle offset.
+const TRIANGLE_OFFSET: usize = 0x4C;
 
 /// An `hkpStorageExtendedMeshShape`: a triangle mesh stored in subparts.
 #[derive(Debug, Clone, PartialEq)]
@@ -275,10 +327,22 @@ impl ExtendedMesh {
         if pack.array_header(at(0xC0)?)?.len != 0 {
             return Err(pack.err(at(0xC0)?, "shape subparts are not supported"));
         }
+        if pack.floats::<4>(at(0x80)?)? != [1.0; 4] {
+            return Err(pack.err(at(0x80)?, "scaling is not (1, 1, 1, 1)"));
+        }
+        if let Some(first) = subs.data.filter(|_| subs.len > 0) {
+            // the embedded subpart is a copy of subpart 0, but for a triangle offset nothing reads
+            let embedded = pack.bytes(at(0x20)?, SUBPART)?;
+            let first = pack.bytes(first, SUBPART)?;
+            let same = |range: std::ops::Range<usize>| embedded.get(range.clone()) == first.get(range);
+            if !same(0..TRIANGLE_OFFSET) || !same(TRIANGLE_OFFSET.saturating_add(4)..SUBPART) {
+                return Err(pack.err(at(0x20)?, "the embedded subpart is not a copy of subpart 0"));
+            }
+        }
         let mut subparts = Vec::new();
         let mut total = 0usize;
         for i in 0..subs.len {
-            let sub = pack.at(subs.data.unwrap_or(0), i.saturating_mul(96))?;
+            let sub = pack.at(subs.data.unwrap_or(0), i.saturating_mul(SUBPART))?;
             let store = pack.target(
                 pack.at(storage.data.unwrap_or(0), i.saturating_mul(4))?,
                 "mesh storage",
@@ -315,6 +379,24 @@ impl ExtendedMesh {
 fn read_subpart(pack: &Packfile<'_>, sub: usize, store: usize, expected_offset: usize) -> Result<Subpart> {
     let sa = |add| pack.at(sub, add);
     let ta = |add| pack.at(store, add);
+    if pack.u8(sa(0x00)?)? != 0 {
+        return Err(pack.err(sa(0x00)?, "subpart type is not triangles"));
+    }
+    if pack.u8(sa(0x01)?)? != 2 {
+        return Err(pack.err(sa(0x01)?, "material index striding type is not 16-bit"));
+    }
+    if pack.u16(sa(0x02)?)? != 12 {
+        return Err(pack.err(sa(0x02)?, "material striding is not 12"));
+    }
+    for &(from, to, what) in &SUBPART_ZERO {
+        if pack
+            .bytes(sa(from)?, to.saturating_sub(from))?
+            .iter()
+            .any(|&b| b != 0)
+        {
+            return Err(pack.err(sa(from)?, format!("subpart {what} is not zero")));
+        }
+    }
     if pack.u16(sa(0x08)?)? != 2 {
         return Err(pack.err(sa(0x08)?, "material index striding is not 2"));
     }
@@ -324,12 +406,12 @@ fn read_subpart(pack: &Packfile<'_>, sub: usize, store: usize, expected_offset: 
     if pack.u32(sa(0x1C)?)? != 16 || pack.u32(sa(0x44)?)? != 16 {
         return Err(pack.err(sa(0x1C)?, "vertex or index striding is not 16"));
     }
-    if pack.u32(sa(0x48)?)? != 0x0300_0000 {
+    if pack.u8(sa(0x48)?)? != 3 {
         return Err(pack.err(sa(0x48)?, "index striding type is not 32-bit"));
     }
-    if pack.count(sa(0x4C)?)? != expected_offset {
+    if pack.count(sa(TRIANGLE_OFFSET)?)? != expected_offset {
         return Err(pack.err(
-            sa(0x4C)?,
+            sa(TRIANGLE_OFFSET)?,
             "triangle offset is not the earlier subparts' triangle count",
         ));
     }
@@ -380,15 +462,12 @@ fn read_subpart(pack: &Packfile<'_>, sub: usize, store: usize, expected_offset: 
     let mut materials = Vec::new();
     for m in 0..mats.len {
         let r = pack.at(mats.data.unwrap_or(0), m.saturating_mul(12))?;
-        let rec = MeshMaterial {
-            a: pack.u32(r)?,
-            b: pack.u32(pack.at(r, 4)?)?,
-            c: pack.u32(pack.at(r, 8)?)?,
-        };
-        if rec.b != 0x3F80 {
-            return Err(pack.err(pack.at(r, 4)?, "material record word b is not 0x3F80"));
-        }
-        materials.push(rec);
+        materials.push(MeshMaterial {
+            filter_info: pack.u32(r)?,
+            restitution: half(pack, pack.at(r, 4)?)?,
+            friction: half(pack, pack.at(r, 6)?)?,
+            user_data: pack.u32(pack.at(r, 8)?)?,
+        });
     }
     let mi = pack.array_header(ta(0x5C)?)?;
     if mi.len != n_tris {

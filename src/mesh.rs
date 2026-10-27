@@ -136,10 +136,12 @@ pub fn extern_shapes<'t, 'a>(
 /// How a mesh-tree section names its vertex and primitive ranges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SectionLayout {
-    /// 2016.2: `firstPackedVertex`, and `sharedVertices.data` / `primitives.data` each packing `(first << 8) | count`.
+    /// 2016.2: `firstPackedVertex`, `numPackedVertices` and `numSharedIndices`, and `sharedVertices.data` /
+    /// `primitives.data` each packing `(first << 8) | count`; the count in `sharedVertices.data` is the packed-vertex
+    /// count again.
     Packed,
     /// 2018.1: separate `firstPackedVertexIndex`, `numPackedVertices`, `firstSharedVertexIndex`, `firstPrimitiveIndex`
-    /// and `numPrimitives` fields.
+    /// and `numPrimitives` fields; no shared-index count (a section's run ends where the next one's starts).
     Fields,
 }
 /// The section layout of each supported SDK version.
@@ -158,6 +160,9 @@ pub struct MeshSection {
     pub packed_vertices: usize,
     /// The section's first entry of the shared-vertex index.
     pub first_shared_vertex: usize,
+    /// How many entries of the shared-vertex index the section has: vertex indices from `packed_vertices` on reach
+    /// them.
+    pub shared_indices: usize,
     /// Index of the section's first primitive in the tree's primitive array.
     pub first_primitive: usize,
     /// How many primitives the section has.
@@ -171,53 +176,129 @@ fn index(value: Value<'_, '_>, at: usize) -> Result<usize> {
 }
 
 /// The sections of an hknpCompressedMeshShapeData mesh tree, as its SDK version names their ranges.
+///
+/// The sections' ranges tile the tree's arrays: each section's packed vertices, shared-vertex index entries and
+/// primitives start where the previous section's end (the first at 0), and the last ends at the array's end. In 2016.2
+/// the count packed into `sharedVertices.data` equals `numPackedVertices`. Both hold in every compressed mesh of the
+/// Sekiro and Elden Ring installs' collision (273,228 and 722,403 sections); a tree that breaks either is refused.
 pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
     let layout = SECTION_LAYOUTS
         .iter()
         .find(|(version, _)| *version == data.tag.version)
         .map(|(_, layout)| *layout)
         .ok_or_else(|| invalid(data.at(), "no mesh section layout for this SDK version"))?;
-    let sections = data.field("meshTree")?.field("sections")?.array()?;
-    (0..sections.len())
-        .map(|i| {
-            let section = sections.get(i)?;
-            let field = |name: &str| index(section.field(name)?, section.at());
-            let [
-                first_packed_vertex,
-                packed_vertices,
-                first_shared_vertex,
-                first_primitive,
-                primitives,
-            ] = match layout {
-                SectionLayout::Packed => {
-                    let shared = index(section.field("sharedVertices")?.field("data")?, section.at())?;
-                    let range = index(section.field("primitives")?.field("data")?, section.at())?;
-                    [
-                        field("firstPackedVertex")?,
-                        shared & 255,
-                        shared >> 8,
-                        range >> 8,
-                        range & 255,
-                    ]
+    let tree = data.field("meshTree")?;
+    let sections = tree.field("sections")?.array()?;
+    let shared_index_len = tree.field("sharedVerticesIndex")?.array()?.len();
+    let mut out: Vec<MeshSection> = Vec::with_capacity(sections.len());
+    // where the next section's ranges must start
+    let (mut packed_at, mut shared_at, mut primitive_at) = (0usize, 0usize, 0usize);
+    for i in 0..sections.len() {
+        let section = sections.get(i)?;
+        let field = |name: &str| index(section.field(name)?, section.at());
+        let (
+            first_packed_vertex,
+            packed_vertices,
+            first_shared_vertex,
+            shared_indices,
+            first_primitive,
+            primitives,
+        ) = match layout {
+            SectionLayout::Packed => {
+                let shared = index(section.field("sharedVertices")?.field("data")?, section.at())?;
+                let range = index(section.field("primitives")?.field("data")?, section.at())?;
+                let packed_vertices = field("numPackedVertices")?;
+                if shared & 255 != packed_vertices {
+                    return Err(invalid(
+                        section.at(),
+                        format!(
+                            "section {i}: the count in sharedVertices.data is {}, numPackedVertices {packed_vertices}",
+                            shared & 255
+                        ),
+                    ));
                 }
-                SectionLayout::Fields => [
+                (
+                    field("firstPackedVertex")?,
+                    packed_vertices,
+                    shared >> 8,
+                    field("numSharedIndices")?,
+                    range >> 8,
+                    range & 255,
+                )
+            }
+            SectionLayout::Fields => {
+                let first_shared = field("firstSharedVertexIndex")?;
+                let end = if i.saturating_add(1) < sections.len() {
+                    let next = sections.get(i.saturating_add(1))?;
+                    index(next.field("firstSharedVertexIndex")?, next.at())?
+                } else {
+                    shared_index_len
+                };
+                let shared_indices = end.checked_sub(first_shared).ok_or_else(|| {
+                        invalid(
+                            section.at(),
+                            format!("section {i}: its shared-vertex index entries start at {first_shared}, past the next section's {end}"),
+                        )
+                    })?;
+                (
                     field("firstPackedVertexIndex")?,
                     field("numPackedVertices")?,
-                    field("firstSharedVertexIndex")?,
+                    first_shared,
+                    shared_indices,
                     field("firstPrimitiveIndex")?,
                     field("numPrimitives")?,
-                ],
-            };
-            Ok(MeshSection {
-                codec: section.field("codecParms")?.vector::<6>()?,
-                first_packed_vertex,
-                packed_vertices,
-                first_shared_vertex,
-                first_primitive,
-                primitives,
-            })
-        })
-        .collect()
+                )
+            }
+        };
+        for (what, first, want) in [
+            ("packed vertex", first_packed_vertex, packed_at),
+            ("shared-vertex index entry", first_shared_vertex, shared_at),
+            ("primitive", first_primitive, primitive_at),
+        ] {
+            if first != want {
+                return Err(invalid(
+                    section.at(),
+                    format!(
+                        "section {i}: its first {what} is {first}, not {want} where the earlier sections end"
+                    ),
+                ));
+            }
+        }
+        let overflow = || invalid(section.at(), "section range overflow");
+        packed_at = packed_at.checked_add(packed_vertices).ok_or_else(overflow)?;
+        shared_at = shared_at.checked_add(shared_indices).ok_or_else(overflow)?;
+        primitive_at = primitive_at.checked_add(primitives).ok_or_else(overflow)?;
+        out.push(MeshSection {
+            codec: section.field("codecParms")?.vector::<6>()?,
+            first_packed_vertex,
+            packed_vertices,
+            first_shared_vertex,
+            shared_indices,
+            first_primitive,
+            primitives,
+        });
+    }
+    for (what, end, len) in [
+        (
+            "packedVertices",
+            packed_at,
+            tree.field("packedVertices")?.array()?.len(),
+        ),
+        ("sharedVerticesIndex", shared_at, shared_index_len),
+        (
+            "primitives",
+            primitive_at,
+            tree.field("primitives")?.array()?.len(),
+        ),
+    ] {
+        if end != len {
+            return Err(invalid(
+                sections.get(0).map_or(data.at(), |s| s.at()),
+                format!("the sections cover {end} entries of {what}, which has {len}"),
+            ));
+        }
+    }
+    Ok(out)
 }
 
 /// Decode an hknpCompressedMeshShapeData mesh tree. Materials and rigid-body
@@ -245,6 +326,7 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
             first_packed_vertex: first,
             packed_vertices: local_count,
             first_shared_vertex: shared_base,
+            shared_indices: shared_count,
             first_primitive: start,
             primitives: count,
         } = range;
@@ -255,6 +337,14 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
             return Err(invalid(section.at(), "shape key range overflow"));
         }
         let vertex = |index: usize| -> Result<[f32; 3]> {
+            if index >= local_count.saturating_add(shared_count) {
+                return Err(invalid(
+                    section.at(),
+                    format!(
+                        "vertex index {index} is past the section's {local_count} packed vertices and {shared_count} shared ones"
+                    ),
+                ));
+            }
             if index < local_count {
                 let index = first
                     .checked_add(index)
@@ -303,6 +393,14 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
             if ix[1] == ix[3] {
                 // a custom primitive `[k, x, n, x]`: its data from vertex index k on in the shared-vertex index
                 let k = ix[0];
+                if k >= local_count.saturating_add(shared_count) {
+                    return Err(invalid(
+                        section.at(),
+                        format!(
+                            "custom primitive {ix:?} starts past the section's shared-vertex index entries"
+                        ),
+                    ));
+                }
                 let start = k
                     .checked_sub(local_count)
                     .and_then(|o| o.checked_add(shared_base))
@@ -358,4 +456,91 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::disallowed_methods,
+    reason = "a test reads the corpus's files; the library itself takes bytes"
+)]
+mod tests {
+    use crate::inputs::{Game, OracleSet, Query, expect_found, resolve};
+    use crate::{Compendium, Tagfile, mesh_sections};
+
+    /// The tagfile, with its own types or the first compendium that has them.
+    fn read<'a>(bytes: &'a [u8], compendia: &[Compendium]) -> Tagfile<'a> {
+        std::iter::once(None)
+            .chain(compendia.iter().map(Some))
+            .find_map(|c| Tagfile::read(bytes, c).ok())
+            .unwrap()
+    }
+
+    /// A real mesh tree whose section counts no longer tile its arrays is refused: one of the corpus's trees of two or
+    /// more sections, with the packed-vertex count of section 0 and then the first packed vertex of section 1 moved
+    /// by one. Skips without the Sekiro corpus.
+    #[test]
+    fn sections_that_do_not_tile_the_arrays_are_refused() {
+        let corpus = Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok");
+        let Some(dir) = resolve(corpus) else {
+            return;
+        };
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        files.sort();
+        let with = |ext: &str| {
+            files
+                .iter()
+                .filter(|p| p.extension().is_some_and(|e| e == ext))
+                .map(|p| std::fs::read(p).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let compendia = with("compendium");
+        let compendia: Vec<_> = compendia.iter().map(|b| Compendium::read(b).unwrap()).collect();
+        let tagfiles = with("hkx");
+        expect_found(corpus, ".hkx files", tagfiles.len());
+        // the first tree of two or more sections: its file, item, and the file offsets of the two counts
+        let (bytes, item, packed_count, second_first) = tagfiles
+            .iter()
+            .find_map(|bytes| {
+                let tag = read(bytes, &compendia);
+                (1..tag.items.len()).find_map(|i| {
+                    let data = tag.item(i).ok()?.get(0).ok()?;
+                    let sections = data
+                        .field("meshTree")
+                        .ok()?
+                        .field("sections")
+                        .ok()?
+                        .array()
+                        .ok()?;
+                    if data.type_name() != "hknpCompressedMeshShapeData" || sections.len() < 2 {
+                        return None;
+                    }
+                    assert!(mesh_sections(data).is_ok());
+                    let at = |s: usize, name: &str| sections.get(s).unwrap().field(name).unwrap().at();
+                    Some((
+                        bytes.clone(),
+                        i,
+                        at(0, "numPackedVertices"),
+                        at(1, "firstPackedVertex"),
+                    ))
+                })
+            })
+            .expect("a mesh tree of two or more sections");
+        for (at, want) in [
+            (packed_count, "the count in sharedVertices.data"),
+            (second_first, "its first packed vertex is"),
+        ] {
+            let mut patched = bytes.clone();
+            patched[at] = patched[at].wrapping_add(1);
+            let tag = read(&patched, &compendia);
+            let e = mesh_sections(tag.item(item).unwrap().get(0).unwrap())
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{e}");
+        }
+    }
 }

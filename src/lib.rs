@@ -73,6 +73,10 @@
     )
 )]
 
+#[cfg(test)]
+#[path = "../tests/inputs/mod.rs"]
+mod inputs;
+
 pub mod animation;
 pub mod cloth;
 pub mod convex;

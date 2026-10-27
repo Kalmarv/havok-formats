@@ -207,6 +207,12 @@ struct Mask {
     scale_flags: u8,
 }
 
+/// The step of a THREECOMP48 component: the f32 nearest `1 / (16383 sqrt 2)`, so the 15-bit range spans
+/// `+-1/sqrt 2`, the largest a quaternion's three smallest components can be.
+const THREE_COMP48_STEP: f32 = 4.316_100_6e-5;
+/// The step of a THREECOMP40 component: the f32 nearest `1 / (2047 sqrt 2)`, so the 12-bit range spans `+-1/sqrt 2`.
+const THREE_COMP40_STEP: f32 = 3.454_356_6e-4;
+
 const STATIC: [u8; 4] = [0x01, 0x02, 0x04, 0x08];
 const SPLINE: [u8; 4] = [0x10, 0x20, 0x40, 0x80];
 
@@ -436,14 +442,14 @@ fn quaternion(r: &mut Reader, how: RotationQuantization) -> Result<[f32; 4]> {
             };
             let negative = (z as u16) >> 15 != 0;
             // a 15-bit value less 16383 is exact in f32
-            let value = |v: i16| (f32::from(v & 0x7FFF) - 16383.0) * 0.000_043_161;
+            let value = |v: i16| (f32::from(v & 0x7FFF) - 16383.0) * THREE_COMP48_STEP;
             three_components([value(x), value(y), value(z)], shift, negative)
         }
         RotationQuantization::ThreeComp40 => {
             let [b0, b1, b2, b3, b4] = r.array::<5>()?;
             let c = u64::from_le_bytes([b0, b1, b2, b3, b4, 0, 0, 0]);
             // 12 bits each, then the index in bits 36-37 and the sign in bit 38; a 12-bit value less 2047 is exact in f32
-            let v = |shift: u32| (((c >> shift) & 0xFFF) as f32 - 2047.0) * 0.000_345_436;
+            let v = |shift: u32| (((c >> shift) & 0xFFF) as f32 - 2047.0) * THREE_COMP40_STEP;
             three_components([v(0), v(12), v(24)], ((c >> 36) & 3) as usize, (c >> 38) & 1 != 0)
         }
         RotationQuantization::Polar32 => {
@@ -711,6 +717,20 @@ mod tests {
         rotation: Fallback::Neutral,
         scale: Fallback::Reference,
     };
+
+    #[test]
+    fn three_component_steps_are_the_nearest_f32_to_their_exact_values() {
+        for (step, levels) in [(THREE_COMP48_STEP, 16383.0), (THREE_COMP40_STEP, 2047.0)] {
+            let exact = 1.0 / (levels * std::f64::consts::SQRT_2);
+            let below = f64::from(f32::from_bits(step.to_bits() - 1));
+            let above = f64::from(f32::from_bits(step.to_bits() + 1));
+            let error = (f64::from(step) - exact).abs();
+            assert!(
+                error <= (below - exact).abs() && error <= (above - exact).abs(),
+                "{step}"
+            );
+        }
+    }
 
     const IDENTITY: QsTransform = QsTransform {
         translation: [1.0, 2.0, 3.0, 0.0],

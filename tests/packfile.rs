@@ -3,10 +3,11 @@
 //! table in `src/packfile/physics.rs` cites runs in primase, outside this repository:
 //! <https://github.com/Kalmarv/primase/tree/main/worlds/shred/tests/collision_disc.rs>.
 #![allow(clippy::unwrap_used)]
-use havok_formats::packfile::Packfile;
 use havok_formats::packfile::physics::{self, ConvexVertices, ExtendedMesh, MOTION_FIXED, RigidBody, Shape};
+use havok_formats::packfile::{CLASS_SIGNATURES, Packfile};
 
-/// Builds a packfile: class names, data bytes, local/global/virtual fixups.
+/// Builds a packfile: class names (each with the signature [`CLASS_SIGNATURES`] lists, or `0x12345678` for a name it
+/// does not), data bytes, local/global/virtual fixups.
 struct Builder {
     classes: Vec<&'static str>,
     data: Vec<u8>,
@@ -69,7 +70,11 @@ impl Builder {
         let mut names = Vec::new();
         let mut name_at = Vec::new();
         for c in &self.classes {
-            names.extend(0x1234_5678u32.to_be_bytes());
+            let signature = CLASS_SIGNATURES
+                .iter()
+                .find(|(name, _)| name == c)
+                .map_or(0x1234_5678, |(_, s)| *s);
+            names.extend(signature.to_be_bytes());
             names.push(9);
             name_at.push(names.len() as u32);
             names.extend(c.as_bytes());
@@ -153,6 +158,7 @@ fn scene() -> Vec<u8> {
     b.data[0x40 + 0x8C] = 1;
     b.f32(0x40 + 0x90, 0.5);
     b.f32(0x40 + 0x94, 0.25);
+    b.u32(0x40 + 0x2C, 7);
     b.u32(0x40 + 0xA8, 0x0003_FFFF);
     b.data[0x40 + 0xE8] = 5;
     // columns: c0 = (0,0,-1), c1 = (0,1,0), c2 = (1,0,0)
@@ -183,7 +189,7 @@ fn rigid_body_and_box() {
     assert_eq!(body.shape, 0x200);
     assert_eq!(body.motion_type, MOTION_FIXED);
     assert_eq!((body.friction, body.restitution), (0.5, 0.25));
-    assert_eq!(body.collision_filter_info, 0x0003_FFFF);
+    assert_eq!((body.collision_filter_info, body.storage_index), (7, 3));
     // world = 1*c0 + 2*c1 + 3*c2 + t = (0,0,-1) + (0,2,0) + (3,0,0) + (10,20,30)
     assert_eq!(body.to_world([1.0, 2.0, 3.0]), [13.0, 22.0, 29.0]);
     assert_eq!(
@@ -212,12 +218,16 @@ fn mesh() -> Vec<u8> {
     b.global(0x1D0, 0x200);
     b.u16(0x1C0, 0x1111);
     b.u16(0x1C2, 0x2222);
+    b.u32(sub, 0x0002_000C);
     b.u32(sub + 0x08, 0x0002_0001);
     b.u32(sub + 0x14, 2);
     b.u32(sub + 0x1C, 16);
     b.u32(sub + 0x20, 4);
     b.u32(sub + 0x44, 16);
     b.u32(sub + 0x48, 0x0300_0000);
+    // the embedded subpart: a copy of subpart 0; the scaling (1, 1, 1, 1)
+    b.data.copy_within(sub..sub + 96, 0x40 + 0x20);
+    b.floats(0x40 + 0x80, &[1.0; 4]);
     let s = 0x200;
     b.array(s + 0x08, Some(0x280), 4);
     b.array(s + 0x14, None, 0);
@@ -237,7 +247,8 @@ fn mesh() -> Vec<u8> {
         b.u32(0x2C0 + 4 * i, *w);
     }
     b.u32(0x2F0, 0x58); // surface (0x58 >> 3) & 0x3F = 11
-    b.u32(0x2F4, 0x3F80);
+    b.u32(0x2F4, 0x3F80); // restitution 0, friction 1 (halves)
+    b.u32(0x2F8, 0xDEAD_BEEF); // userData, kept as stored
     b.u16(0x320, 0);
     b.u16(0x322, 0);
     b.build()
@@ -257,8 +268,11 @@ fn extended_mesh() {
     assert_eq!(s.triangles, vec![[0, 1, 2], [0, 2, 3]]);
     assert_eq!(s.material_indices, vec![0, 0]);
     assert_eq!(s.materials.len(), 1);
-    assert_eq!(s.materials[0].a, 0x58);
-    assert_eq!((s.materials[0].a >> 3) & 0x3F, 11);
+    let material = s.materials[0];
+    assert_eq!(material.filter_info, 0x58);
+    assert_eq!((material.filter_info >> 3) & 0x3F, 11);
+    assert_eq!((material.restitution, material.friction), (0.0, 1.0));
+    assert_eq!(material.user_data, 0xDEAD_BEEF);
     assert_eq!(m.welding, vec![0x1111, 0x2222]);
     assert_eq!(m.triangle_count(), 2);
     assert_eq!(m.aabb_center, [0.5, 0.0, 0.5]);
@@ -327,6 +341,50 @@ fn refusals_name_the_offset() {
     assert!(refuse(&patch(0x40 + 20, &[0, 0, 0, 0x10])).contains("outside the file"));
     // truncated file
     assert!(refuse(&good[..good.len() - 40]).contains("outside the file"));
+    // hkRootLevelContainer's signature (the first class-name entry) is not the 7.1 class's
+    let e = refuse(&patch(0x40 + 3 * 48, &[0, 0, 0, 0]));
+    assert!(
+        e.contains("hkRootLevelContainer") && e.contains("0x2772c11e") && e.contains("0xd0"),
+        "{e}"
+    );
+}
+
+#[test]
+fn header_words_and_class_signatures_are_kept() {
+    let mut b = Builder::new(0x80);
+    b.object(0, "hkRootLevelContainer");
+    b.object(0x40, "hkpSomeClassNotInTheCorpus");
+    let bytes = b.build();
+    let p = Packfile::read(&bytes).unwrap();
+    assert_eq!((p.user_tag, p.filler), (0, [0xFFFF_FFFF; 2]));
+    let names: Vec<_> = p
+        .class_names()
+        .iter()
+        .map(|c| (c.name.as_str(), c.signature))
+        .collect();
+    // a name the table does not list is kept with its signature, unchecked
+    assert_eq!(
+        names,
+        [
+            ("hkRootLevelContainer", 0x2772_C11E),
+            ("hkpSomeClassNotInTheCorpus", 0x1234_5678)
+        ]
+    );
+    assert_eq!(
+        physics::census(&p).unknown.get("hkpSomeClassNotInTheCorpus"),
+        Some(&1)
+    );
+}
+
+#[test]
+fn rigid_body_contact_delay_is_checked() {
+    let mut bytes = scene();
+    // the data section's start, from its header (the third, at 0x40 + 96)
+    let data_start = u32::from_be_bytes(bytes[0x40 + 96 + 20..0x40 + 96 + 24].try_into().unwrap()) as usize;
+    bytes[data_start + 0x40 + 0xAA] = 0;
+    let p = Packfile::read(&bytes).unwrap();
+    let e = RigidBody::read(&p, 0x40).unwrap_err().to_string();
+    assert!(e.contains("contactPointCallbackDelay"), "{e}");
 }
 
 #[test]
@@ -407,12 +465,43 @@ fn mesh_refusals() {
         ExtendedMesh::read(&p, 0x40).unwrap_err().to_string()
     };
     assert!(e.contains("fourth index word"), "{e}");
-    let e = {
-        let x = patch(0x2F4, 0x3F81);
+    let refusal = |at: usize, v: u32| {
+        let x = patch(at, v);
         let p = Packfile::read(&x).unwrap();
         ExtendedMesh::read(&p, 0x40).unwrap_err().to_string()
     };
-    assert!(e.contains("0x3F80"), "{e}");
+    // friction 1.0078 is a finite half and is read; an infinite one is not
+    {
+        let x = patch(0x2F4, 0x3F81);
+        let p = Packfile::read(&x).unwrap();
+        let m = ExtendedMesh::read(&p, 0x40).unwrap();
+        assert_eq!(m.subparts[0].materials[0].friction, f32::from_bits(0x3F81_0000));
+    }
+    let e = refusal(0x2F4, 0x7F80);
+    assert!(e.contains("non-finite half"), "{e}");
+    let e = refusal(0x40 + 0x8C, 0x3F00_0000); // scaling w 0.5
+    assert!(e.contains("scaling"), "{e}");
+    let e = refusal(0x40 + 0x20 + 0x14, 3); // embedded triangle count differs from subpart 0's
+    assert!(e.contains("embedded subpart"), "{e}");
+    // a subpart word changed in subpart 0 and in its embedded copy (at shape + 0x20), so the copy still holds
+    let subpart_refusal = |at: usize, v: u32| {
+        let mut x = patch(0x140 + at, v);
+        x[data_start + 0x60 + at..data_start + 0x60 + at + 4].copy_from_slice(&v.to_be_bytes());
+        let p = Packfile::read(&x).unwrap();
+        ExtendedMesh::read(&p, 0x40).unwrap_err().to_string()
+    };
+    for (at, v, want) in [
+        (0x50, 1, "userData"),
+        (0x30, 0x3F80_0000, "extrusion"), // extrusion x
+        (0x18, 0x10, "vertexBase"),
+        (0x48, 0x0301_0000, "flipAlternateTriangles"),
+        (0x00, 0x0102_000C, "type is not triangles"), // type 1
+        (0x00, 0x0001_000C, "16-bit"),                // 8-bit material indices
+        (0x00, 0x0002_0010, "material striding"),     // 16-byte material records
+    ] {
+        let e = subpart_refusal(at, v);
+        assert!(e.contains(want), "{want}: {e}");
+    }
     let e = {
         let x = patch(0x320, 0x0001_0000); // material index 1 of 1
         let p = Packfile::read(&x).unwrap();
