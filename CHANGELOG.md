@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-27)
 
 The checks that a census of every Sekiro and Elden Ring tagfile, type table and spline animation settled. Each new
 refusal is of an input none of those files has: a read of both installs (19,137 + 68,722 distinct tagfiles, 16 + 36
