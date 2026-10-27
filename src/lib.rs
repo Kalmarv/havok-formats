@@ -1,24 +1,24 @@
-//! Bounds-checked views of Havok binary tagfiles and their type compendia.
-//! Type indices are one-based; zero denotes a null type or object reference.
+//! Bounds-checked readers of Havok binary data: `TAG0` tagfiles and their `TCM0` type compendia ([`Tagfile`],
+//! [`Compendium`]), the older 7.1.0 packfile container ([`packfile`]), and the objects read from them: hknp compressed
+//! meshes ([`compressed_mesh`]), cloth and ragdoll data ([`cloth`]), skeletons, bindings and spline compressed
+//! animation ([`animation`], [`spline`]).
+//!
+//! Type indices are one-based; zero denotes a null type or object reference. Every read is checked: a file that is
+//! shorter than it says, or refers outside itself, is an [`Error`] naming the offset, never a panic.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod animation;
 pub mod cloth;
-mod convex;
 mod mesh;
 pub mod packfile;
-pub use convex::{ConvexCore, MAX_PLANES, MAX_VERTICES};
 mod section;
 pub mod spline;
 mod spline_sample;
-pub mod world;
 
 pub use mesh::{
     CompressedMesh, CustomKind, CustomPrimitive, MeshSection, ShapeInstance, Triangle, compressed_mesh,
     extern_shapes, mesh_sections,
 };
-/// Register this crate's passes (`lower-havok-clips`).
-pub use world::{LOWER_HAVOK_CLIPS, register};
 mod tagfile;
 mod types;
 mod value;
@@ -28,13 +28,27 @@ pub use value::{Array, Value};
 
 pub use section::{Section, sections};
 
+/// A refusal: what is wrong, at the byte offset where it was found.
 #[derive(Debug, thiserror::Error)]
 #[error("Havok at {offset:#x}: {detail}")]
 pub struct Error {
+    /// The byte offset in the data read.
     pub offset: usize,
+    /// What the data holds that the reader refuses, or lacks.
     pub detail: String,
 }
 
+impl Error {
+    /// A refusal at `offset`.
+    pub fn new(offset: usize, detail: impl Into<String>) -> Self {
+        Error {
+            offset,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// A read's result.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// A read past the animation data ([`primase_foundations::bytes::Cursor`]): the error at the read's offset.
@@ -48,8 +62,5 @@ impl From<primase_foundations::bytes::BoundsError> for Error {
 }
 
 fn invalid(offset: usize, detail: impl Into<String>) -> Error {
-    Error {
-        offset,
-        detail: detail.into(),
-    }
+    Error::new(offset, detail)
 }

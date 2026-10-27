@@ -1,6 +1,6 @@
 [package]
-name = "primase-havok"
-description = "Checked Havok tagfile and compendium views"
+name = "havok-formats"
+description = "Checked readers of Havok TAG0/TCM0 tagfiles and 7.1.0 packfiles: compressed meshes, cloth, spline animation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,6 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 primase-foundations.workspace = true
-primase-core.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true
