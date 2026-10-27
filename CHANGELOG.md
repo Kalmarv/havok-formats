@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-27)
 
 Packfile members are named as the class signatures the files store define them, and what a census of the 490 Tony
 Hawk's SHRED packfiles and of every Sekiro and Elden Ring collision mesh shows is now checked on every file.
