@@ -77,7 +77,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 [[package]]
 name = "primase-foundations"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=d0851b3ce3b233489174a9d218251ee5b423a926#d0851b3ce3b233489174a9d218251ee5b423a926"
+source = "git+https://github.com/Kalmarv/primase-foundations?rev=8dd2fb8caa84eb22b6998655550f1cf288ca6b93#8dd2fb8caa84eb22b6998655550f1cf288ca6b93"
 dependencies = [
  "half",
  "thiserror",
@@ -86,7 +86,7 @@ dependencies = [
 [[package]]
 name = "primase-testdata"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/primase-testdata?rev=16df8f765279587d36c68249811d62996a1364e2#16df8f765279587d36c68249811d62996a1364e2"
+source = "git+https://github.com/Kalmarv/primase-testdata?rev=3d70d5ce04d0335b41d359fbfc7d6d5a714b581d#3d70d5ce04d0335b41d359fbfc7d6d5a714b581d"
 dependencies = [
  "serde_json",
  "thiserror",
