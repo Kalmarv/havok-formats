@@ -67,7 +67,7 @@ runs the unit tests, the hand-built fixtures (tagfile and packfile records writt
 
 One test reads real data: `tests/corpus.rs` reads every tagfile and the compendium of a Sekiro area's map collision and decodes every compressed mesh in them. It needs your own copy of those files, and skips with one line naming what is missing when they are not configured. Point the `GAME_DATA` environment variable at a TOML file naming where your installs, keys, tools and extracted file sets are (the layout and a sample are in [primase-testdata](https://github.com/Kalmarv/primase-testdata)); [tests/inputs/README.md](tests/inputs/README.md) lists exactly which inputs this crate's tests read, what each is and where it comes from. No game files are included in this repository or needed to build it.
 
-Add it with `cargo add havok-formats` (or `havok-formats = "0.2"` under `[dependencies]`). Building needs Rust 1.99 (edition 2024). The crate depends on [primase-foundations](https://github.com/Kalmarv/primase-foundations) (byte cursors and vertex unpacking) and, for tests only, primase-testdata.
+Add it with `cargo add havok-formats` (or `havok-formats = "0.3"` under `[dependencies]`). Building needs Rust 1.99 (edition 2024). The crate depends on [primase-foundations](https://github.com/Kalmarv/primase-foundations) (byte cursors and vertex unpacking) and, for tests only, primase-testdata.
 
 ## Contributing
 
