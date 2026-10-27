@@ -176,23 +176,23 @@ fn list<'t, 'a, T>(v: Value<'t, 'a>, each: impl Fn(Value<'t, 'a>) -> Result<T>) 
 
 fn i16s(v: Value<'_, '_>) -> Result<Vec<i16>> {
     list(v, |e| {
-        i16::try_from(e.signed()?).map_err(|_| invalid(e.offset, "track index exceeds i16"))
+        i16::try_from(e.signed()?).map_err(|_| invalid(e.at(), "track index exceeds i16"))
     })
 }
 
 fn u32s(v: Value<'_, '_>) -> Result<Vec<u32>> {
     list(v, |e| {
-        u32::try_from(e.unsigned()?).map_err(|_| invalid(e.offset, "offset exceeds u32"))
+        u32::try_from(e.unsigned()?).map_err(|_| invalid(e.at(), "offset exceeds u32"))
     })
 }
 
 fn count(v: Value<'_, '_>) -> Result<usize> {
-    usize::try_from(v.signed()?).map_err(|_| invalid(v.offset, "negative count"))
+    usize::try_from(v.signed()?).map_err(|_| invalid(v.at(), "negative count"))
 }
 
 /// An integer field that is not negative, as u32.
 fn small(v: Value<'_, '_>) -> Result<u32> {
-    u32::try_from(v.signed()?).map_err(|_| invalid(v.offset, "value outside u32"))
+    u32::try_from(v.signed()?).map_err(|_| invalid(v.at(), "value outside u32"))
 }
 
 pub(crate) fn skeleton(v: Value<'_, '_>) -> Result<Skeleton> {
@@ -206,7 +206,7 @@ pub(crate) fn skeleton(v: Value<'_, '_>) -> Result<Skeleton> {
     let reference_pose = list(v.field("referencePose")?, qs)?;
     if parents.len() != bones.len() || reference_pose.len() != bones.len() {
         return Err(invalid(
-            v.offset,
+            v.at(),
             format!(
                 "{} bones, {} parents, {} reference transforms",
                 bones.len(),
@@ -251,7 +251,7 @@ fn animation(v: Value<'_, '_>) -> Result<Animation> {
             transform_offsets: u32s(v.field("transformOffsets")?)?,
             float_offsets: u32s(v.field("floatOffsets")?)?,
             data: v.field("data")?.array()?.raw()?.to_vec(),
-            endian: i32::try_from(v.field("endian")?.signed()?).map_err(|_| invalid(v.offset, "endian"))?,
+            endian: i32::try_from(v.field("endian")?.signed()?).map_err(|_| invalid(v.at(), "endian"))?,
         }),
         "hkaInterleavedUncompressedAnimation" => Tracks::Interleaved(InterleavedData {
             transforms: list(v.field("transforms")?, qs)?,

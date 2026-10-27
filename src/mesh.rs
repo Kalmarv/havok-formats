@@ -71,7 +71,7 @@ pub fn extern_shapes<'t, 'a>(
             .any(|c| matches!(c.kind, CustomKind::Extern(_)))
         {
             return Err(invalid(
-                shape.offset,
+                shape.at(),
                 "extern shape references in a shape without extern shapes",
             ));
         }
@@ -84,11 +84,16 @@ pub fn extern_shapes<'t, 'a>(
         let t = instance.field("transform")?.vector::<16>()?;
         let scale = instance.field("scale")?.vector::<4>()?;
         if scale[..3] != [1., 1., 1.] {
-            return Err(invalid(instance.offset, "a scaled extern shape instance"));
+            return Err(invalid(instance.at(), "a scaled extern shape instance"));
         }
-        let transform: [[f32; 3]; 4] = std::array::from_fn(|c| [t[4 * c], t[4 * c + 1], t[4 * c + 2]]);
+        // four columns of `x y z` and a padding lane
+        let mut transform = [[0.0f32; 3]; 4];
+        for (column, stored) in transform.iter_mut().zip(t.as_chunks::<4>().0) {
+            let [x, y, z, _] = *stored;
+            *column = [x, y, z];
+        }
         if transform.iter().flatten().any(|x| !x.is_finite()) {
-            return Err(invalid(instance.offset, "nonfinite extern shape transform"));
+            return Err(invalid(instance.at(), "nonfinite extern shape transform"));
         }
         instances.push(ShapeInstance {
             transform,
@@ -104,13 +109,13 @@ pub fn extern_shapes<'t, 'a>(
             Some(seen @ false) => *seen = true,
             Some(true) => {
                 return Err(invalid(
-                    shape.offset,
+                    shape.at(),
                     format!("extern shape {index} referenced twice"),
                 ));
             }
             None => {
                 return Err(invalid(
-                    shape.offset,
+                    shape.at(),
                     format!(
                         "custom primitive references extern shape {index} of {}",
                         instances.len()
@@ -121,7 +126,7 @@ pub fn extern_shapes<'t, 'a>(
     }
     if referenced.contains(&false) {
         return Err(invalid(
-            shape.offset,
+            shape.at(),
             "an extern shape no custom primitive references",
         ));
     }
@@ -154,18 +159,25 @@ pub struct MeshSection {
     pub first_primitive: usize,
     pub primitives: usize,
 }
+/// An unsigned stored value as an index; a refusal at `at` when it does not fit the platform's `usize`.
+fn index(value: Value<'_, '_>, at: usize) -> Result<usize> {
+    let stored = value.unsigned()?;
+    usize::try_from(stored)
+        .map_err(|_| invalid(at, format!("expected an index that fits usize, found {stored}")))
+}
+
 /// The sections of an hknpCompressedMeshShapeData mesh tree, as its SDK version names their ranges.
 pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
     let layout = SECTION_LAYOUTS
         .iter()
         .find(|(version, _)| *version == data.tag.version)
         .map(|(_, layout)| *layout)
-        .ok_or_else(|| invalid(data.offset, "no mesh section layout for this SDK version"))?;
+        .ok_or_else(|| invalid(data.at(), "no mesh section layout for this SDK version"))?;
     let sections = data.field("meshTree")?.field("sections")?.array()?;
     (0..sections.len())
         .map(|i| {
             let section = sections.get(i)?;
-            let field = |name: &str| section.field(name)?.unsigned().map(|v| v as usize);
+            let field = |name: &str| index(section.field(name)?, section.at());
             let [
                 first_packed_vertex,
                 packed_vertices,
@@ -174,8 +186,8 @@ pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
                 primitives,
             ] = match layout {
                 SectionLayout::Packed => {
-                    let shared = section.field("sharedVertices")?.field("data")?.unsigned()? as usize;
-                    let range = section.field("primitives")?.field("data")?.unsigned()? as usize;
+                    let shared = index(section.field("sharedVertices")?.field("data")?, section.at())?;
+                    let range = index(section.field("primitives")?.field("data")?, section.at())?;
                     [
                         field("firstPackedVertex")?,
                         shared & 255,
@@ -236,40 +248,54 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
         let scale = [codec[3], codec[4], codec[5]];
         // The primitive occupies seven key bits; its quad half occupies one.
         if count > 128 || section_index > 0x00ff_ffff {
-            return Err(invalid(section.offset, "shape key range overflow"));
+            return Err(invalid(section.at(), "shape key range overflow"));
         }
         let vertex = |index: usize| -> Result<[f32; 3]> {
             if index < local_count {
                 let index = first
                     .checked_add(index)
-                    .ok_or_else(|| invalid(section.offset, "packed vertex index overflow"))?;
+                    .ok_or_else(|| invalid(section.at(), "packed vertex index overflow"))?;
                 let value = u32::try_from(packed.get(index)?.unsigned()?)
-                    .map_err(|_| invalid(section.offset, "packed vertex exceeds u32"))?;
+                    .map_err(|_| invalid(section.at(), "packed vertex exceeds u32"))?;
                 primase_foundations::vertex::packed_position32(value, scale, offset)
-                    .map_err(|e| invalid(section.offset, e.to_string()))
+                    .map_err(|e| invalid(section.at(), e.to_string()))
             } else {
-                let index = (index - local_count)
-                    .checked_add(shared_base)
-                    .ok_or_else(|| invalid(section.offset, "shared vertex index overflow"))?;
-                let index = shared_indices.get(index)?.unsigned()? as usize;
-                primase_foundations::vertex::packed_position64(shared.get(index)?.unsigned()?, min, max)
-                    .map_err(|e| invalid(section.offset, e.to_string()))
+                let position = index
+                    .checked_sub(local_count)
+                    .and_then(|i| i.checked_add(shared_base))
+                    .ok_or_else(|| invalid(section.at(), "shared vertex index overflow"))?;
+                let position = self::index(shared_indices.get(position)?, section.at())?;
+                primase_foundations::vertex::packed_position64(shared.get(position)?.unsigned()?, min, max)
+                    .map_err(|e| invalid(section.at(), e.to_string()))
             }
         };
         for i in 0..count {
-            let indices = primitives.get(start + i)?.field("indices")?.array()?;
+            let primitive = start
+                .checked_add(i)
+                .ok_or_else(|| invalid(section.at(), "primitive index overflow"))?;
+            let indices = primitives.get(primitive)?.field("indices")?.array()?;
             if indices.len() != 4 {
-                return Err(invalid(section.offset, "primitive must have four indices"));
+                return Err(invalid(section.at(), "primitive must have four indices"));
             }
             let mut ix = [0usize; 4];
             for (j, x) in ix.iter_mut().enumerate() {
-                *x = indices.get(j)?.unsigned()? as usize;
+                *x = index(indices.get(j)?, section.at())?;
             }
             if ix == [0xde, 0xad, 0xde, 0xad] {
-                result.dead_primitives += 1;
+                result.dead_primitives = result.dead_primitives.saturating_add(1);
                 continue;
             }
-            let key = ((section_index as u32) << 8) | ((i as u32) << 1);
+            // the section number above the quad half and the primitive's seven bits (bounded by the check above)
+            let key = u32::try_from(section_index)
+                .ok()
+                .and_then(|section| section.checked_mul(256))
+                .zip(
+                    u32::try_from(i)
+                        .ok()
+                        .and_then(|primitive| primitive.checked_mul(2)),
+                )
+                .map(|(section, primitive)| section | primitive)
+                .ok_or_else(|| invalid(section.at(), "shape key range overflow"))?;
             if ix[1] == ix[3] {
                 // a custom primitive `[k, x, n, x]`: its data from vertex index k on in the shared-vertex index
                 let k = ix[0];
@@ -278,26 +304,29 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
                     .and_then(|o| o.checked_add(shared_base))
                     .ok_or_else(|| {
                         invalid(
-                            section.offset,
+                            section.at(),
                             format!("custom primitive {ix:?} names a packed vertex"),
                         )
                     })?;
                 let word = |j: usize| -> Result<u32> {
-                    u32::try_from(shared_indices.get(start + j)?.unsigned()?)
-                        .map_err(|_| invalid(section.offset, "custom primitive word exceeds u32"))
+                    let at = start
+                        .checked_add(j)
+                        .ok_or_else(|| invalid(section.at(), "custom primitive word index overflow"))?;
+                    u32::try_from(shared_indices.get(at)?.unsigned()?)
+                        .map_err(|_| invalid(section.at(), "custom primitive word exceeds u32"))
                 };
                 let kind = match word(0)? {
                     EXTERN_SHAPE_TAG if ix == [k, k, 4, k] => {
                         let (low, high) = (word(2)?, word(3)?);
                         if low > 0xffff || high > 0xffff {
-                            return Err(invalid(section.offset, "extern shape index exceeds 32 bits"));
+                            return Err(invalid(section.at(), "extern shape index exceeds 32 bits"));
                         }
                         CustomKind::Extern((low | (high << 16)) as usize)
                     }
                     first if first != EXTERN_SHAPE_TAG && first & 0xff == 0x52 => CustomKind::Unread,
                     first => {
                         return Err(invalid(
-                            section.offset,
+                            section.at(),
                             format!("custom primitive {ix:?} of an unknown kind (first word {first})"),
                         ));
                     }

@@ -44,7 +44,7 @@ impl ConvexShape {
         }
         let only = |kind| Self {
             kind,
-            offset: shape.offset,
+            offset: shape.at(),
             vertices: Vec::new(),
             planes: Vec::new(),
             faces: Vec::new(),
@@ -58,7 +58,7 @@ impl ConvexShape {
         }
         if shape.type_name() == "hknpSphereShape" {
             if vertices.len() != 1 {
-                return Err(invalid(shape.offset, "a sphere shape without exactly one vertex"));
+                return Err(invalid(shape.at(), "a sphere shape without exactly one vertex"));
             }
             return Ok(Self {
                 vertices,
@@ -76,18 +76,18 @@ impl ConvexShape {
         for i in 0..stored.len() {
             let face = stored.get(i)?;
             let start = usize::try_from(face.field("firstIndex")?.unsigned()?)
-                .map_err(|_| invalid(face.offset, "face index overflow"))?;
+                .map_err(|_| invalid(face.at(), "face index overflow"))?;
             let count = usize::try_from(face.field("numIndices")?.unsigned()?)
-                .map_err(|_| invalid(face.offset, "face size overflow"))?;
+                .map_err(|_| invalid(face.at(), "face size overflow"))?;
             let end = start
                 .checked_add(count)
                 .filter(|&e| e <= indices.len())
-                .ok_or_else(|| invalid(face.offset, "face exceeds index array"))?;
+                .ok_or_else(|| invalid(face.at(), "face exceeds index array"))?;
             let mut polygon = Vec::with_capacity(count);
             for k in start..end {
                 polygon.push(
                     usize::try_from(indices.get(k)?.unsigned()?)
-                        .map_err(|_| invalid(face.offset, "vertex index overflow"))?,
+                        .map_err(|_| invalid(face.at(), "vertex index overflow"))?,
                 );
             }
             faces.push(polygon);

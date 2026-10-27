@@ -135,11 +135,11 @@ fn small(v: Value<'_, '_>) -> Result<u32> {
         (7, "hknpConstraintId" | "hknpConstraintGroupId" | "hkHandle") => v.field("value")?,
         _ => v,
     };
-    u32::try_from(v.unsigned()?).map_err(|_| invalid(v.offset, "value outside u32"))
+    u32::try_from(v.unsigned()?).map_err(|_| invalid(v.at(), "value outside u32"))
 }
 
 fn small_signed(v: Value<'_, '_>) -> Result<i32> {
-    i32::try_from(v.signed()?).map_err(|_| invalid(v.offset, "value outside i32"))
+    i32::try_from(v.signed()?).map_err(|_| invalid(v.at(), "value outside i32"))
 }
 
 /// Every object of class `class` among the file's items, in item order.
@@ -263,7 +263,7 @@ pub fn read(tag: &Tagfile<'_>) -> Result<Physics> {
         let bone_to_body = list(data.field("boneToBodyMap")?, small_signed)?;
         if bone_to_body.len() != skeleton.bones.len() {
             return Err(invalid(
-                data.offset,
+                data.at(),
                 format!(
                     "{} bones, {} body map entries",
                     skeleton.bones.len(),

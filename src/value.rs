@@ -103,7 +103,7 @@ impl<'t, 'a> Array<'t, 'a> {
 }
 impl<'t, 'a> Value<'t, 'a> {
     /// The file offset of the value, for refusals.
-    fn at(self) -> usize {
+    pub(crate) fn at(self) -> usize {
         self.tag.at(self.offset)
     }
     /// The name of the value's type (a value's type index is one the tagfile checked: its items', fields' and
