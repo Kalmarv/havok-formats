@@ -233,3 +233,99 @@ fn repeated_zero_size_elements_are_refused() {
     let error = Tagfile::read(&zero_size(u32::MAX), None).unwrap_err();
     assert!(error.detail.contains("zero-size"), "{error}");
 }
+
+/// The SDKs whose tagfiles are read: 2015.1 (Sekiro's one clip), 2016.2 and 2018.1; the 2018.2 string, which no file
+/// of either game has, is not.
+#[test]
+fn the_sdk_versions_are_2015_1_2016_2_and_2018_1() {
+    assert_eq!(
+        havok_formats::SDK_VERSIONS,
+        [*b"20150100", *b"20160200", *b"20180100"]
+    );
+    for sdk in havok_formats::SDK_VERSIONS {
+        let bytes = fixture_with(&sdk, packed(3));
+        let tag = Tagfile::read(&bytes, None).expect("fixture");
+        assert_eq!(tag.version, sdk);
+        assert_eq!(
+            tag.root().unwrap().field("value").unwrap().unsigned().unwrap(),
+            17
+        );
+    }
+    for other in [b"20180200", b"20140100", b"20170100"] {
+        assert!(Tagfile::read(&fixture_with(other, packed(3)), None).is_err());
+    }
+}
+
+/// The byte of item `i`'s record that holds its kind: the record starts 8 bytes into the item table's section and
+/// takes 12, the kind is the fourth.
+fn kind_byte(bytes: &[u8], i: usize) -> usize {
+    section_offset(bytes, b"ITEM") + 8 + 12 * i + 3
+}
+
+/// An item's kind is the byte beside its type index: 0x10 (one object) or 0x20 (a run), and 0 on the null item; the
+/// rest of the byte is no flags in any file.
+#[test]
+fn an_item_is_an_object_or_a_run_and_nothing_else() {
+    use havok_formats::ItemKind;
+    let bytes = fixture();
+    let tag = Tagfile::read(&bytes, None).expect("fixture");
+    let kinds: Vec<ItemKind> = tag.items.iter().map(|i| i.kind).collect();
+    assert_eq!(
+        kinds,
+        [ItemKind::Null, ItemKind::Object, ItemKind::Object, ItemKind::Run]
+    );
+    // either of the two kinds on any item after the null one
+    for (item, byte) in [(1, 0x20), (3, 0x10)] {
+        let mut changed = bytes.clone();
+        changed[kind_byte(&bytes, item)] = byte;
+        assert!(Tagfile::read(&changed, None).is_ok(), "item {item} as {byte:#x}");
+    }
+    for (item, byte) in [
+        (1, 0x00),
+        (1, 0x11),
+        (1, 0x30),
+        (2, 0x01),
+        (3, 0x2F),
+        (3, 0xF0),
+        (0, 0x10),
+        (0, 0x20),
+    ] {
+        let mut changed = bytes.clone();
+        changed[kind_byte(&bytes, item)] = byte;
+        let error = Tagfile::read(&changed, None).unwrap_err();
+        assert_eq!(error.offset, kind_byte(&bytes, item), "item {item} as {byte:#x}");
+        assert!(
+            error
+                .detail
+                .contains(&format!("item {item}: kind byte {byte:#x}")),
+            "{error}"
+        );
+    }
+}
+
+/// A pointer, string or array slot is the item index and zeros: the rest of an eight-byte pointer, and the size and
+/// capacity words of a 16-byte `hkArray` (the loader fills them in).
+#[test]
+fn a_reference_slot_holds_only_its_item_index() {
+    let bytes = fixture();
+    let data = section_offset(&bytes, b"DATA") + 8;
+    // the pointer member is DATA bytes 8 to 16, the array member 16 to 32
+    for (member, slot, size) in [("pointer", 8, 8), ("array", 16, 16)] {
+        for high in 4..size {
+            let mut changed = bytes.clone();
+            changed[data + slot + high] = 1;
+            let tag = Tagfile::read(&changed, None).expect("the container reads");
+            let value = tag.root().unwrap().field(member).unwrap();
+            let error = if member == "pointer" {
+                value.dereference().unwrap_err()
+            } else {
+                value.array().unwrap_err()
+            };
+            assert_eq!(error.offset, data + slot + 4, "{member} byte {high}");
+            assert!(error.detail.contains(&format!("bytes 4..{size}")), "{error}");
+        }
+        // the index alone reads
+        let tag = Tagfile::read(&bytes, None).expect("fixture");
+        assert!(tag.root().unwrap().field(member).is_ok());
+    }
+}

@@ -146,8 +146,6 @@ pub struct Track {
 /// How a rotation is stored (`RotationQuantization`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RotationQuantization {
-    /// Code 0: 32 bits a quaternion, 4-byte aligned.
-    Polar32,
     /// Code 1: 40 bits a quaternion, byte aligned.
     ThreeComp40,
     /// Code 2: 48 bits a quaternion, 2-byte aligned.
@@ -159,10 +157,13 @@ pub enum RotationQuantization {
 impl RotationQuantization {
     fn of(code: u8, at: usize) -> Result<RotationQuantization> {
         Ok(match code {
-            0 => RotationQuantization::Polar32,
             1 => RotationQuantization::ThreeComp40,
             2 => RotationQuantization::ThreeComp48,
             5 => RotationQuantization::Uncompressed,
+            // No transform track of the 49,645 spline animations of Sekiro's and Elden Ring's animation binders
+            // (5,241,511 tracks, absent rotations included) selects code 0, 3 or 4, so no real stream shows how they
+            // are stored.
+            0 => return Err(invalid(at, "rotation quantization POLAR32 is not read")),
             3 => return Err(invalid(at, "rotation quantization THREECOMP24 is not read")),
             4 => return Err(invalid(at, "rotation quantization STRAIGHT16 is not read")),
             other => return Err(invalid(at, format!("rotation quantization {other} is unknown"))),
@@ -172,7 +173,7 @@ impl RotationQuantization {
     /// The alignment of a quantized quaternion within the data.
     fn align(self) -> usize {
         match self {
-            RotationQuantization::Polar32 | RotationQuantization::Uncompressed => 4,
+            RotationQuantization::Uncompressed => 4,
             RotationQuantization::ThreeComp40 => 1,
             RotationQuantization::ThreeComp48 => 2,
         }
@@ -280,7 +281,9 @@ fn mask(r: &mut Reader) -> Result<Mask> {
     })
 }
 
-/// A spline track's head: the point count, the degree and the knots.
+/// A spline track's head: the point count, the degree and the knots. The degree is 1, 2 or 3: of the 4,024,482 spline
+/// tracks (positions, rotations and scales) of the 49,645 spline animations in Sekiro's and Elden Ring's animation
+/// binders, 2,142,458 have degree 1 and 1,882,024 degree 3; none has degree 2, and none a higher one.
 fn knots(r: &mut Reader) -> Result<(usize, Knots)> {
     let at = r.position();
     let items = r.i16(Endian::Little)?;
@@ -289,7 +292,7 @@ fn knots(r: &mut Reader) -> Result<(usize, Knots)> {
         .ok()
         .and_then(|n| n.checked_add(1))
         .ok_or_else(|| invalid(at, "a spline track with a negative count"))?;
-    if !(1..=4).contains(&degree) || points <= usize::from(degree) {
+    if !(1..=3).contains(&degree) || points <= usize::from(degree) {
         return Err(invalid(
             at,
             format!("a spline track of degree {degree} with {points} control points"),
@@ -452,31 +455,6 @@ fn quaternion(r: &mut Reader, how: RotationQuantization) -> Result<[f32; 4]> {
             let v = |shift: u32| (((c >> shift) & 0xFFF) as f32 - 2047.0) * THREE_COMP40_STEP;
             three_components([v(0), v(12), v(24)], ((c >> 36) & 3) as usize, (c >> 38) & 1 != 0)
         }
-        RotationQuantization::Polar32 => {
-            let c = r.u32(Endian::Little)?;
-            let radius = f64::from((c >> 18) & 0x3FF) / 1023.0;
-            let w = 1.0 - radius * radius;
-            let phi_theta = f64::from(c & 0x3FFFF);
-            let ring = phi_theta.sqrt().floor();
-            let (mut phi, mut theta) = (0.0, 0.0);
-            if ring > 0.0 {
-                theta = std::f64::consts::FRAC_PI_4 * (phi_theta - ring * ring) / ring;
-                phi = ring * (std::f64::consts::FRAC_PI_2 / 511.0);
-            }
-            let magnitude = (1.0 - w * w).sqrt();
-            let mut q = [
-                phi.sin() * theta.cos() * magnitude,
-                phi.sin() * theta.sin() * magnitude,
-                phi.cos() * magnitude,
-                w,
-            ];
-            for (v, bit) in q.iter_mut().zip([28, 29, 30, 31]) {
-                if (c >> bit) & 1 != 0 {
-                    *v = -*v;
-                }
-            }
-            q.map(round_f32)
-        }
     })
 }
 
@@ -547,6 +525,23 @@ impl SplineAnimation {
         if s.endian != 0 {
             return Err(invalid(0, "a big endian animation is not read"));
         }
+        // The mask area of a block: a 4-byte mask a transform track and a byte a float track, padded to 4. The header
+        // states it, and does in all 49,645 spline animations of the animation binders of Sekiro (10,876) and Elden
+        // Ring (38,769).
+        let masks = animation
+            .transform_tracks
+            .checked_mul(4)
+            .and_then(|n| n.checked_add(animation.float_tracks))
+            .map(|n| n.next_multiple_of(4));
+        if masks.is_none_or(|n| u32::try_from(n).ok() != Some(s.mask_and_quantization_size)) {
+            return Err(invalid(
+                0,
+                format!(
+                    "maskAndQuantizationSize {} disagrees with the track counts ({} transform tracks, {} float tracks)",
+                    s.mask_and_quantization_size, animation.transform_tracks, animation.float_tracks
+                ),
+            ));
+        }
         if s.max_frames_per_block < 2
             || s.num_frames == 0
             || s.frame_duration.is_nan()
@@ -570,8 +565,8 @@ impl SplineAnimation {
             .skip(1)
             .map(|&o| o as usize)
             .chain([s.data.len()]);
-        let blocks = s.block_offsets.iter().zip(&s.float_block_offsets).zip(nexts);
-        for (b, ((&start, &float), next)) in blocks.enumerate() {
+        let starts = s.block_offsets.iter().zip(&s.float_block_offsets).zip(nexts);
+        for (b, ((&start, &float), next)) in starts.enumerate() {
             let start = start as usize;
             if !start.is_multiple_of(16) {
                 return Err(invalid(start, "a block is not 16-byte aligned"));
@@ -581,7 +576,11 @@ impl SplineAnimation {
                 .checked_add(float as usize)
                 .ok_or_else(|| invalid(start, format!("block {b}'s float data offset overflows")))?;
             let mut r = Reader::at(&s.data, start)?;
-            let ends = Ends { float_start, next };
+            let ends = Ends {
+                float_start,
+                next,
+                last: b.checked_add(1) == Some(blocks),
+            };
             out.push(block(
                 &mut r,
                 animation.transform_tracks,
@@ -607,6 +606,8 @@ impl SplineAnimation {
 struct Ends {
     float_start: usize,
     next: usize,
+    /// Whether this is the animation's last block.
+    last: bool,
 }
 
 /// Part `axis` (0, 1 or 2: x, y, z) of a vector, from its three `names`.
@@ -628,6 +629,8 @@ fn block(
     let masks = (0..tracks).map(|_| mask(r)).collect::<Result<Vec<_>>>()?;
     r.pad(4)?;
     let mut out = Vec::with_capacity(tracks);
+    // the last track's rotation quantization code and where its rotation ends (where it would, if it is absent)
+    let mut last_rotation = None;
     for (track, m) in masks.into_iter().enumerate() {
         // a failure names where it is: the block, the track and which of its three parts
         let at = |part: &'static str| {
@@ -649,6 +652,7 @@ fn block(
         }
         r.pad(4)?;
         let rotation = rotation(r, m.rotation_flags, m.rotation).map_err(at("rotation"))?;
+        last_rotation = Some((m.rotation, r.position()));
         r.pad(4)?;
         let scale = vector(r, m.scale_flags, m.scale, &mut bad).map_err(at("scale"))?;
         for axis in bad.drain(..) {
@@ -665,7 +669,11 @@ fn block(
             scale,
         });
     }
-    let Ends { float_start, next } = ends;
+    let Ends {
+        float_start,
+        next,
+        last,
+    } = ends;
     if r.position() != float_start {
         return Err(invalid(
             r.position(),
@@ -675,14 +683,16 @@ fn block(
             ),
         ));
     }
-    let on_boundary = r.position().is_multiple_of(16);
     r.pad(16)?;
     if r.position() != next {
-        // The 2018.1 files the install holds pad a block whose float data begins on a 16-byte boundary by 16 more
-        // zero bytes in some cases (711 of 1,568 such blocks; the other 857 and every block of the 2016.2 files have
-        // none, with the same trailing bytes: the encoder's rule is its own, not the data's). Those 16 zero bytes are
-        // accepted, nothing else.
-        let extra = on_boundary
+        // The 2018.1 encoder pads the last block of an animation by 16 more zero bytes when the last track's rotation
+        // is 40 bits (code 1) and ends within two bytes of the padded end of the block: a 40-bit rotation is read with
+        // an 8-byte load, which must not run past the data. The rotation counts where it would be stored when its
+        // mask states none. In Elden Ring that is 4,975 of the 33,794 + 4,975 last blocks, exactly those the rule
+        // names, and no other block of either game has the bytes (Sekiro's 2016.2 data has none, though 1,243 of its
+        // last blocks have the geometry). They are accepted there and nowhere else.
+        let extra = last
+            && last_rotation.is_some_and(|(code, end)| code == 1 && r.position().saturating_sub(end) < 3)
             && r.position().checked_add(16) == Some(next)
             && r.bytes()
                 .get(r.position()..next)
@@ -757,7 +767,7 @@ mod tests {
                 num_frames: frames,
                 num_blocks: blocks.len() as u32,
                 max_frames_per_block: per_block,
-                mask_and_quantization_size: 0,
+                mask_and_quantization_size: (tracks * 4) as u32,
                 block_duration: (per_block - 1) as f32,
                 block_inverse_duration: 1.0 / (per_block - 1) as f32,
                 frame_duration: 1.0,
@@ -861,47 +871,147 @@ mod tests {
         assert!(SplineAnimation::parse(&a).is_ok());
     }
 
-    /// A block of 32 bytes (a static position of three components and an uncompressed static rotation), so that its
-    /// float data begins on a 16-byte boundary.
-    fn aligned_block(x: f32) -> Vec<u8> {
-        let mut d = vec![5 << 2, 0x01 | 0x02 | 0x04, 0x01, 0x00];
-        d.extend([f(x), f(0.0), f(0.0)].concat());
-        d.extend([f(0.0), f(1.0), f(0.0), f(0.0)].concat());
-        assert_eq!(d.len(), 32);
-        d
+    /// `tracks` tracks whose masks state nothing but the rotation quantization `code`: a block of `4 * tracks` bytes.
+    fn empty_tracks(tracks: usize, code: u8) -> Vec<u8> {
+        (0..tracks).flat_map(|_| [code << 2, 0, 0, 0]).collect()
     }
 
-    /// Two aligned blocks with `between` between them: the float data of each begins at 32 of its own.
-    fn two_aligned_blocks(between: &[u8]) -> SplineAnimation {
-        let mut d = aligned_block(1.0);
-        d.extend(between);
-        let second = d.len() as u32;
-        d.extend(aligned_block(2.0));
-        let a = animation(d, 1, &[(0, 32), (second, 32)], 3, 5);
-        SplineAnimation::parse(&a).unwrap()
+    /// The animation of one block of `block` (its float data at the block's end) followed by `after`, and one more
+    /// block of the same tracks after it when `second` is set.
+    fn with_trailing(block: &[u8], after: &[u8], second: bool, tracks: usize) -> Result<SplineAnimation> {
+        let mut d = block.to_vec();
+        d.extend(after);
+        let end = block.len() as u32;
+        let mut blocks = vec![(0, end)];
+        if second {
+            blocks.push((d.len() as u32, end));
+            d.extend(block);
+        }
+        let frames = 2 + second as u32 * 2;
+        SplineAnimation::parse(&animation(d, tracks, &blocks, 3, frames))
     }
 
-    /// The padding between two blocks whose float data begins on a 16-byte boundary: none (the 2016.2 files, and some
-    /// 2018.1 ones) or 16 zero bytes (other 2018.1 ones) are the data's; anything else is not.
+    /// The 16 zero bytes the 2018.1 encoder adds after a last block whose last track's rotation is 40 bits and ends
+    /// within two bytes of the block's padded end, and the cases of the rule that has them accepted (nothing else is).
     #[test]
-    fn a_block_ending_on_a_boundary_may_be_followed_by_sixteen_zero_bytes() {
-        let none = two_aligned_blocks(&[]);
-        let sixteen = two_aligned_blocks(&[0; 16]);
-        assert_eq!(
-            none.sample(0, 3.0, &IDENTITY, MIXED).unwrap().translation,
-            sixteen.sample(0, 3.0, &IDENTITY, MIXED).unwrap().translation
+    fn sixteen_zero_bytes_are_accepted_after_a_last_block_by_the_rule_and_nowhere_else() {
+        // four tracks of absent components: the masks fill 16 bytes, the (absent) last rotation ends where the block
+        // does, on a 16-byte boundary
+        let code1 = empty_tracks(4, 1);
+        assert!(
+            with_trailing(&code1, &[], false, 4).is_ok(),
+            "the bytes are not required"
         );
-        for between in [vec![0u8; 8], vec![0u8; 32], {
+        assert!(with_trailing(&code1, &[0; 16], false, 4).is_ok());
+        // the same bytes in the middle of the animation, or a last rotation of another quantization, or less or
+        // more or other bytes
+        assert!(
+            with_trailing(&code1, &[0; 16], true, 4).is_err(),
+            "not a last block"
+        );
+        for code in [2, 5] {
+            assert!(
+                with_trailing(&empty_tracks(4, code), &[0; 16], false, 4).is_err(),
+                "code {code}"
+            );
+        }
+        for after in [vec![0u8; 8], vec![0u8; 32], {
             let mut v = vec![0u8; 16];
             v[5] = 1;
             v
         }] {
-            let mut d = aligned_block(1.0);
-            d.extend(&between);
-            let second = d.len() as u32;
-            d.extend(aligned_block(2.0));
-            let a = animation(d, 1, &[(0, 32), (second, 32)], 3, 5);
-            assert!(SplineAnimation::parse(&a).is_err(), "{between:?}");
+            assert!(with_trailing(&code1, &after, false, 4).is_err(), "{after:?}");
+        }
+        // three tracks: the masks end at 12 and the block pads to 16, four bytes past the last rotation's end
+        assert!(
+            with_trailing(&empty_tracks(3, 1), &[0; 16], false, 3).is_err(),
+            "the rotation ends 4 bytes before the padded end"
+        );
+        // only the last track's rotation counts
+        let mut mixed = empty_tracks(4, 5);
+        mixed[0] = 1 << 2;
+        assert!(with_trailing(&mixed, &[0; 16], false, 4).is_err());
+    }
+
+    /// The rule counts the end of a rotation that is stored: a position x, then a 3-point spline rotation of 40-bit
+    /// quaternions (23 bytes) ends at 31, one byte before the padded end 32.
+    #[test]
+    fn a_stored_last_rotation_ends_the_rule_where_it_ends() {
+        let mut d = vec![1 << 2, 0x01, 0x10, 0x00];
+        d.extend(f(1.0)); // position x, static
+        d.extend(2i16.to_le_bytes());
+        d.push(1);
+        d.extend([0, 0, 1, 2, 2]); // 3 points + 1 + 1 knots
+        d.extend([0x7F; 15]); // 3 quaternions of 5 bytes
+        assert_eq!(d.len(), 31);
+        let end = d.len() as u32;
+        pad(&mut d, 4);
+        assert_eq!(d.len() as u32, 32);
+        let mut with_extra = d.clone();
+        with_extra.extend([0; 16]);
+        for data in [d, with_extra] {
+            let a = animation(data, 1, &[(0, end + 1)], 256, 2);
+            assert!(SplineAnimation::parse(&a).is_ok());
+        }
+    }
+
+    /// The header's mask area is the masks of the tracks, padded to 4.
+    #[test]
+    fn the_mask_size_the_header_states_must_be_the_tracks() {
+        let mut d = static_block(1.0, 2.0);
+        let end = d.len() as u32;
+        pad(&mut d, 16);
+        for stated in [0u32, 3, 8] {
+            let mut a = animation(d.clone(), 1, &[(0, end)], 256, 2);
+            if let Tracks::Spline(s) = &mut a.tracks {
+                s.mask_and_quantization_size = stated;
+            }
+            let e = SplineAnimation::parse(&a).unwrap_err().to_string();
+            assert!(e.contains("maskAndQuantizationSize"), "{e}");
+        }
+        assert!(SplineAnimation::parse(&animation(d, 1, &[(0, end)], 256, 2)).is_ok());
+    }
+
+    /// A position spline of `degree` over `points` control points: x a spline, nothing else.
+    fn degree_block(degree: u8, points: usize) -> Vec<u8> {
+        let mut d = vec![1 << 2, 0x10, 0x00, 0x00];
+        d.extend(((points - 1) as i16).to_le_bytes());
+        d.push(degree);
+        d.extend(vec![0; points + degree as usize + 1]); // knots
+        pad(&mut d, 4);
+        d.extend(f(0.0));
+        d.extend(f(1.0)); // x bounds
+        d.extend(vec![0; points]); // control points
+        pad(&mut d, 4);
+        d
+    }
+
+    /// Degrees 1, 2 and 3 are the SDK's; no spline track of the games' files has another.
+    #[test]
+    fn a_spline_track_has_degree_one_to_three() {
+        for (degree, ok) in [
+            (0, false),
+            (1, true),
+            (2, true),
+            (3, true),
+            (4, false),
+            (5, false),
+        ] {
+            let mut d = degree_block(degree, 6);
+            let end = d.len() as u32;
+            pad(&mut d, 16);
+            let a = animation(d, 1, &[(0, end)], 256, 2);
+            let result = SplineAnimation::parse(&a);
+            assert_eq!(result.is_ok(), ok, "degree {degree}: {result:?}");
+            if !ok {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains(&format!("degree {degree}")),
+                    "degree {degree}"
+                );
+            }
         }
     }
 
@@ -909,8 +1019,8 @@ mod tests {
     /// control points 0, 10, 0 at knots [0 0 5 10 10] are a ramp up over frames 0 to 5 and down over 5 to 10.
     #[test]
     fn a_spline_position_is_evaluated_between_its_knots() {
-        // the position flags: x spline, y static, z nothing
-        let mut d = vec![0x00, 0x10 | 0x02, 0x00, 0x00];
+        // the position flags: x spline, y static, z nothing; the rotation (absent) is quantized as code 1
+        let mut d = vec![1 << 2, 0x10 | 0x02, 0x00, 0x00];
         pad(&mut d, 4);
         d.extend(2i16.to_le_bytes());
         d.push(1);
@@ -935,8 +1045,8 @@ mod tests {
         assert_eq!(at(99.0), [0.0, 7.5, 3.0, 0.0]);
     }
 
-    /// The identity in three 12-bit components and the index 3 (w), and the 180 degrees about z the polar form's
-    /// radius 1023 with no angle is, as the formulas state them.
+    /// The identity in three 12-bit components and the index 3 (w), and in three 15-bit ones, as the formulas state
+    /// them.
     #[test]
     fn the_quantized_quaternions_decode_by_their_bit_layouts() {
         let c: u64 = 0x7FF | (0x7FF << 12) | (0x7FF << 24) | (3 << 36);
@@ -970,10 +1080,6 @@ mod tests {
             quaternion(&mut r, RotationQuantization::ThreeComp48).unwrap(),
             [0.0, 0.0, 0.0, -1.0]
         );
-        let bytes = (1023u32 << 18).to_le_bytes();
-        let mut r = Reader::at(&bytes, 0).unwrap();
-        let q = quaternion(&mut r, RotationQuantization::Polar32).unwrap();
-        assert_eq!(q, [0.0, 0.0, 1.0, 0.0]);
     }
 
     /// Two blocks of two frames each (maxFramesPerBlock 3 gives 2 frames a block): a time picks the block that covers
@@ -1000,19 +1106,17 @@ mod tests {
 
     #[test]
     fn what_is_not_read_is_refused_by_name() {
-        // rotation quantization 3 (THREECOMP24)
-        let mut d = vec![3 << 2, 0, 0x01, 0];
-        d.extend([0, 0, 0]);
-        pad(&mut d, 4);
-        let end = d.len() as u32;
-        pad(&mut d, 16);
-        let a = animation(d, 1, &[(0, end)], 256, 2);
-        assert!(
-            SplineAnimation::parse(&a)
-                .unwrap_err()
-                .to_string()
-                .contains("THREECOMP24")
-        );
+        // rotation quantizations 0 (POLAR32), 3 (THREECOMP24) and 4 (STRAIGHT16)
+        for (code, name) in [(0u8, "POLAR32"), (3, "THREECOMP24"), (4, "STRAIGHT16")] {
+            let mut d = vec![code << 2, 0, 0x01, 0];
+            d.extend([0, 0, 0, 0]);
+            pad(&mut d, 4);
+            let end = d.len() as u32;
+            pad(&mut d, 16);
+            let a = animation(d, 1, &[(0, end)], 256, 2);
+            let e = SplineAnimation::parse(&a).unwrap_err().to_string();
+            assert!(e.contains(name), "{e}");
+        }
         let mut a = animation(vec![0; 16], 1, &[(0, 4)], 256, 2);
         a.float_tracks = 1;
         assert!(

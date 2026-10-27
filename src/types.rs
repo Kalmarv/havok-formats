@@ -15,7 +15,9 @@ pub struct Type {
     pub name: String,
     /// Index of the parent type; 0 for none.
     pub parent: usize,
-    /// Which optional properties follow in the file (bit set, below 128).
+    /// Which optional properties follow in the file (a bit set, below 128): 1 the format word, 2 the subtype, 4 the
+    /// version, 8 the size and alignment words, 16 a type-flags word ([`Type::type_flags`]), 32 the members, 64 the
+    /// interfaces.
     pub flags: u64,
     /// The format word: the kind in the low four bits (7 class, 6 pointer, 8 array, 3 string, 2 and 4 integers) and
     /// kind-specific bits above.
@@ -26,10 +28,13 @@ pub struct Type {
     pub version: Option<u64>,
     /// Size in bytes.
     pub size: Option<usize>,
-    /// Alignment in bytes.
+    /// Alignment in bytes: the low 12 bits of the stored alignment word.
     pub alignment: Option<usize>,
-    /// The stored abstract value.
-    pub abstract_value: Option<u64>,
+    /// The requested alignment: bits 12 to 15 of the stored alignment word. 0 in every type of both installs but
+    /// two: `hkCompressedMassProperties` (3, on an 8-byte alignment) and `hkpConstraintAtom` (15, on a 16-byte one).
+    pub requested_alignment: Option<u8>,
+    /// The type's flags word, stored when presence bit 16 of [`Type::flags`] is set.
+    pub type_flags: Option<TypeFlags>,
     /// Template parameters: a name and a value (a type index when the name starts with `t`).
     pub parameters: Vec<(String, u64)>,
     /// The members the class declares itself (inherited ones are on its parents).
@@ -40,6 +45,40 @@ pub struct Type {
     pub interfaces: Vec<(usize, u64)>,
     /// The type's hash, from the THSH section when the file has one.
     pub hash: Option<u32>,
+}
+
+/// A type's flags word, a bit set. The distinct type tables of Sekiro (229 tables, 84,566 types) and Elden Ring (875
+/// tables, 373,202 types) store the values 0, 1, 3, 16, 64, 144, 147 and 256 only; the union of their bits is
+/// [`TypeFlags::SEEN`]. The bits are named as HKLib, a public reader of the 2018 SDK, names them; a bit outside
+/// [`TypeFlags::SEEN`] is kept as stored.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct TypeFlags(pub u32);
+
+impl TypeFlags {
+    /// Bit 0 (value 1): not serialisable. Stored on `void`, `hkPtrAndInt` and the `hcl` base types.
+    pub const NOT_SERIALIZABLE: u32 = 1;
+    /// Bit 1 (value 2): abstract. Stored with 1 on the `hcl` base types (value 3).
+    pub const ABSTRACT: u32 = 2;
+    /// Bit 4 (value 16): an interface. Stored on `hkContainerHeapAllocator` and `hkHashMap`.
+    pub const INTERFACE: u32 = 16;
+    /// Bit 6 (value 64): a weak pointer. Stored on `hkViewPtr`, and on `T*` in Elden Ring's tables.
+    pub const WEAK_POINTER: u32 = 64;
+    /// Bit 7 (value 128): the class has its own virtual table. Stored on `hkBaseObject` (144 with the interface bit)
+    /// and on `hclSetupMeshSection` and `hkbVerifiable` (147).
+    pub const OWN_VTABLE: u32 = 128;
+    /// Bit 8 (value 256): an attribute class. Stored on `hkbRoleAttribute`.
+    pub const ATTRIBUTE: u32 = 256;
+    /// The union of the bits any type of either install stores.
+    pub const SEEN: u32 = 0x1D3;
+
+    /// Whether every bit of `mask` is set.
+    pub fn contains(self, mask: u32) -> bool {
+        self.0 & mask == mask
+    }
+    /// The bits no type of either install stores, as stored.
+    pub fn unseen(self) -> u32 {
+        self.0 & !Self::SEEN
+    }
 }
 
 /// A member of a class.
@@ -255,10 +294,19 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
         }
         if t.flags & 8 != 0 {
             t.size = Some(c.index()?);
-            t.alignment = Some(c.index()?);
+            // The alignment word: the alignment in its low 12 bits, a requested alignment in bits 12 to 15. Nothing
+            // above is stored (no type of either install has a word of 16 bits or more).
+            let word = c.packed()?;
+            if word >> 16 != 0 {
+                return Err(c.error(format!("alignment word {word:#x} has bits above 15")));
+            }
+            t.alignment = Some(usize::from(low16(word) & 0xFFF));
+            t.requested_alignment =
+                Some(u8::try_from(low16(word) >> 12).map_err(|_| c.error("alignment word"))?);
         }
         if t.flags & 16 != 0 {
-            t.abstract_value = Some(c.packed()?);
+            let flags = u32::try_from(c.packed()?).map_err(|_| c.error("type flags exceed 32 bits"))?;
+            t.type_flags = Some(TypeFlags(flags));
         }
         if t.flags & 32 != 0 {
             // The low 16 bits count the field records that follow; the high 16 bits count reflection properties,
@@ -318,7 +366,266 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
     if let Some(i) = parent_cycle(&types) {
         return Err(invalid(section.offset, format!("type {i} inherits from itself")));
     }
+    check_hashes(&types, section.offset)?;
     Ok(types)
+}
+
+/// The low 16 bits of `v`.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the low bits are what is asked for"
+)]
+fn low16(v: u64) -> u16 {
+    (v & 0xFFFF) as u16
+}
+
+/// The low 32 bits of `v`: the number a type hash takes of a stored value.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the low bits are what is asked for"
+)]
+fn low32(v: u64) -> u32 {
+    (v & 0xFFFF_FFFF) as u32
+}
+
+/// The CRC-32 table of the reflected polynomial 0xEDB88320.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "a constant table, built from indices below 256"
+)]
+const CRC_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut h = i as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            h = (h >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(h & 1));
+            bit += 1;
+        }
+        table[i] = h;
+        i += 1;
+    }
+    table
+};
+
+/// The IEEE CRC-32 of `bytes` continued from `crc`, a finished CRC-32 (0 for none): the chain a type hash is.
+fn crc32_continue(crc: u32, bytes: &[u8]) -> u32 {
+    let mut h = !crc;
+    for &b in bytes {
+        let index = ((h ^ u32::from(b)) & 0xFF) as usize;
+        h = (h >> 8) ^ CRC_TABLE.get(index).copied().unwrap_or_default();
+    }
+    !h
+}
+
+/// The most template parameters, nested ones included, that one type's hash walks. A type of the games has a handful;
+/// the bound stops a table whose parameters name each other from running away.
+const TEMPLATE_STEPS: usize = 1 << 12;
+
+/// The chained CRC-32 the THSH section stores for a type, built from the type's description:
+///
+/// 1. the hash of the parent (0 for none);
+/// 2. with presence bit 64, for each interface the CRC of the interface type's name and the stored word;
+/// 3. with presence bit 1, the format word, and for an array (kind 8) whose format has `(format >> 5) & 3 == 1` the
+///    hash of its subtype;
+/// 4. the type's name;
+/// 5. its template parameters in order: a type parameter (its name starts with `t`) is the CRC of that type's name and
+///    then, the same way, of its own parameters; a value parameter is the stored value;
+/// 6. with presence bit 4, the version;
+/// 7. with presence bit 8, `size | alignment word << 16`, the alignment word being [`Type::alignment`] with
+///    [`Type::requested_alignment`] in bits 12 to 15;
+/// 8. with presence bit 16, the type flags;
+/// 9. with presence bit 32, for every member of the type and of its parents, the root's first: the name, the offset
+///    and the hash of the member's type.
+///
+/// Every number is a little-endian u32 (the low 32 bits of the stored value), names are their bytes without a
+/// terminator. A census of the games' tagfiles and compendia reproduced every stored hash with this recipe (Sekiro
+/// 20,180 of 20,180, Elden Ring 90,033 of 90,033), so a hash it does not reproduce names a type whose table was
+/// read wrongly.
+struct Hashes<'t> {
+    types: &'t [Type],
+    state: Vec<HashState>,
+}
+
+/// Where a type's hash is: a type a cycle comes back to while it is being hashed counts as 0.
+#[derive(Clone, Copy)]
+enum HashState {
+    Unvisited,
+    Active,
+    Done(u32),
+}
+
+impl<'t> Hashes<'t> {
+    fn new(types: &'t [Type]) -> Self {
+        Hashes {
+            types,
+            state: vec![HashState::Unvisited; types.len()],
+        }
+    }
+
+    /// The hash of a type already hashed; 0 for the null type and for one that is still being hashed.
+    fn done(&self, index: usize) -> u32 {
+        match self.state.get(index) {
+            Some(HashState::Done(h)) => *h,
+            _ => 0,
+        }
+    }
+
+    /// Start hashing `index` if it has not been: mark it and list the types whose hashes it needs first, in the order
+    /// the recipe asks for them.
+    fn open(&mut self, index: usize) -> Option<(usize, Vec<usize>)> {
+        let state = self.state.get_mut(index)?;
+        if !matches!(state, HashState::Unvisited) {
+            return None;
+        }
+        *state = HashState::Active;
+        let t = self.types.get(index)?;
+        let mut needs = Vec::new();
+        if t.parent != 0 {
+            needs.push(t.parent);
+        }
+        if let Some(subtype) = t.subtype
+            && t.format.is_some_and(|f| f & 15 == 8 && (f >> 5) & 3 == 1)
+        {
+            needs.push(subtype);
+        }
+        if t.flags & 32 != 0 {
+            needs.extend(t.fields.iter().map(|f| f.type_index));
+        }
+        // popped from the end
+        needs.reverse();
+        Some((index, needs))
+    }
+
+    /// The hash of type `index`, and of the types it needs; without recursion, as a table may chain them deep.
+    fn hash(&mut self, index: usize, at: usize) -> Result<u32> {
+        let mut stack: Vec<(usize, Vec<usize>)> = self.open(index).into_iter().collect();
+        while let Some((current, needs)) = stack.last_mut() {
+            if let Some(next) = needs.pop() {
+                if let Some(frame) = self.open(next) {
+                    stack.push(frame);
+                }
+                continue;
+            }
+            let current = *current;
+            stack.pop();
+            let h = self.compute(current, at)?;
+            if let Some(state) = self.state.get_mut(current) {
+                *state = HashState::Done(h);
+            }
+        }
+        Ok(self.done(index))
+    }
+
+    /// Type `index`'s hash, the hashes it needs being done.
+    fn compute(&self, index: usize, at: usize) -> Result<u32> {
+        let Some(t) = self.types.get(index) else {
+            return Ok(0);
+        };
+        let word = |sig: u32, v: u64| crc32_continue(sig, &low32(v).to_le_bytes());
+        let mut sig = self.done(t.parent);
+        if t.flags & 64 != 0 {
+            for &(interface, stored) in &t.interfaces {
+                let name = self.types.get(interface).map_or("", |i| i.name.as_str());
+                sig = crc32_continue(sig, name.as_bytes());
+                sig = word(sig, stored);
+            }
+        }
+        if let Some(format) = t.format {
+            sig = word(sig, format);
+            if format & 15 == 8 && (format >> 5) & 3 == 1 {
+                sig = word(sig, u64::from(self.done(t.subtype.unwrap_or(0))));
+            }
+        }
+        sig = crc32_continue(sig, t.name.as_bytes());
+        sig = self.template(sig, t, at)?;
+        if let Some(version) = t.version {
+            sig = word(sig, version);
+        }
+        if let (Some(size), Some(alignment), Some(requested)) = (t.size, t.alignment, t.requested_alignment) {
+            let alignment_word = (alignment as u64) | (u64::from(requested) << 12);
+            sig = word(sig, (size as u64) | (alignment_word << 16));
+        }
+        if let Some(flags) = t.type_flags {
+            sig = word(sig, u64::from(flags.0));
+        }
+        if t.flags & 32 != 0 {
+            // the type's members after those of its parents, the root's first
+            let mut chain = Vec::new();
+            let mut owner = index;
+            while owner != 0 && chain.len() <= self.types.len() {
+                chain.push(owner);
+                owner = self.types.get(owner).map_or(0, |o| o.parent);
+            }
+            for owner in chain.iter().rev().filter_map(|&o| self.types.get(o)) {
+                for f in &owner.fields {
+                    sig = crc32_continue(sig, f.name.as_bytes());
+                    sig = word(sig, f.offset as u64);
+                    sig = word(sig, u64::from(self.done(f.type_index)));
+                }
+            }
+        }
+        Ok(sig)
+    }
+
+    /// `sig` continued over the template parameters of `t`.
+    fn template(&self, mut sig: u32, t: &Type, at: usize) -> Result<u32> {
+        // the parameter lists being walked, each with the next parameter to take
+        let mut stack = vec![(t, 0usize)];
+        let mut steps = 0usize;
+        while let Some((current, next)) = stack.last_mut() {
+            let Some((name, value)) = current.parameters.get(*next) else {
+                stack.pop();
+                continue;
+            };
+            *next = next.saturating_add(1);
+            steps = steps.saturating_add(1);
+            if steps > TEMPLATE_STEPS {
+                return Err(invalid(
+                    at,
+                    format!(
+                        "template parameters of type {} nest or repeat past {TEMPLATE_STEPS} steps",
+                        t.name
+                    ),
+                ));
+            }
+            if name.starts_with('t') {
+                let Some(parameter) = usize::try_from(*value).ok().and_then(|i| self.types.get(i)) else {
+                    return Err(invalid(
+                        at,
+                        format!("template parameter {name} of {} names no type", t.name),
+                    ));
+                };
+                sig = crc32_continue(sig, parameter.name.as_bytes());
+                stack.push((parameter, 0));
+            } else {
+                sig = crc32_continue(sig, &low32(*value).to_le_bytes());
+            }
+        }
+        Ok(sig)
+    }
+}
+
+/// Every stored type hash against the hash the type's description gives (see [`Hashes`]).
+fn check_hashes(types: &[Type], at: usize) -> Result<()> {
+    let mut hashes = Hashes::new(types);
+    for (i, t) in types.iter().enumerate() {
+        let Some(stored) = t.hash else { continue };
+        let computed = hashes.hash(i, at)?;
+        if computed != stored {
+            return Err(invalid(
+                at,
+                format!(
+                    "type {i} ({}): stored hash {stored:#x}, the table gives {computed:#x}",
+                    t.name
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A type on a cycle of parents, if there is one: every type's parent chain must end at the null type 0. Linear in the
@@ -357,7 +664,12 @@ fn parent_cycle(types: &[Type]) -> Option<usize> {
 }
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing, reason = "test fixtures built by hand")]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "test fixtures built by hand"
+)]
 mod tests {
     use super::*;
     #[test]
@@ -425,6 +737,350 @@ mod tests {
             parent_cycle(&typed(&[0, 0, 3, 4, 2])).is_some(),
             "a cycle beyond the first type"
         );
+    }
+
+    /// One type of a hand-built type table: what the file stores of it.
+    #[derive(Default, Clone)]
+    struct Spec {
+        name: &'static str,
+        parent: usize,
+        format: Option<u64>,
+        subtype: Option<usize>,
+        version: Option<u64>,
+        /// The size and the alignment word.
+        size: Option<(u64, u64)>,
+        type_flags: Option<u64>,
+        /// Name, member flags, offset, type.
+        fields: Vec<(&'static str, u64, u64, usize)>,
+        /// Type and stored word.
+        interfaces: Vec<(usize, u64)>,
+        /// Name and value.
+        parameters: Vec<(&'static str, u64)>,
+    }
+
+    fn packed(v: u64) -> Vec<u8> {
+        if v < 128 {
+            vec![v as u8]
+        } else if v < 16384 {
+            ((v as u16) | 0x8000).to_be_bytes().to_vec()
+        } else if v < 1 << 21 {
+            vec![0xC0 | (v >> 16) as u8, (v >> 8) as u8, v as u8]
+        } else {
+            let mut out = vec![0xF8];
+            out.extend(&v.to_be_bytes()[3..]);
+            out
+        }
+    }
+
+    fn section_bytes(name: &[u8; 4], leaf: bool, payload: &[u8]) -> Vec<u8> {
+        let mut out = ((payload.len() as u32 + 8) | if leaf { 0x4000_0000 } else { 0 })
+            .to_be_bytes()
+            .to_vec();
+        out.extend(name);
+        out.extend(payload);
+        out
+    }
+
+    /// The index of `name` in a string table, adding it first if it is new.
+    fn index<'a>(table: &mut Vec<&'a str>, name: &'a str) -> u64 {
+        let at = table.iter().position(|&n| n == name).unwrap_or_else(|| {
+            table.push(name);
+            table.len() - 1
+        });
+        at as u64
+    }
+
+    /// The TYPE section of `specs` (type 1 first), with a THSH section of `hashes` (type index, hash) if any.
+    fn type_section(specs: &[Spec], hashes: &[(usize, u32)]) -> Vec<u8> {
+        let (mut names, mut field_names) = (Vec::<&str>::new(), Vec::<&str>::new());
+        let mut type_names = packed(specs.len() as u64 + 1);
+        for s in specs {
+            type_names.extend(packed(index(&mut names, s.name)));
+            type_names.extend(packed(s.parameters.len() as u64));
+            for &(name, value) in &s.parameters {
+                type_names.extend(packed(index(&mut names, name)));
+                type_names.extend(packed(value));
+            }
+        }
+        let mut bodies = Vec::new();
+        for (i, s) in specs.iter().enumerate() {
+            let mut record = Vec::new();
+            let mut presence = 0u64;
+            if let Some(format) = s.format {
+                presence |= 1;
+                record.extend(packed(format));
+            }
+            if let Some(subtype) = s.subtype {
+                presence |= 2;
+                record.extend(packed(subtype as u64));
+            }
+            if let Some(version) = s.version {
+                presence |= 4;
+                record.extend(packed(version));
+            }
+            if let Some((size, alignment)) = s.size {
+                presence |= 8;
+                record.extend(packed(size));
+                record.extend(packed(alignment));
+            }
+            if let Some(flags) = s.type_flags {
+                presence |= 16;
+                record.extend(packed(flags));
+            }
+            if !s.fields.is_empty() {
+                presence |= 32;
+                record.extend(packed(s.fields.len() as u64));
+                for &(name, flags, offset, type_index) in &s.fields {
+                    record.extend(packed(index(&mut field_names, name)));
+                    record.extend(packed(flags));
+                    record.extend(packed(offset));
+                    record.extend(packed(type_index as u64));
+                }
+            }
+            if !s.interfaces.is_empty() {
+                presence |= 64;
+                record.extend(packed(s.interfaces.len() as u64));
+                for &(type_index, stored) in &s.interfaces {
+                    record.extend(packed(type_index as u64));
+                    record.extend(packed(stored));
+                }
+            }
+            bodies.extend(packed(i as u64 + 1));
+            bodies.extend(packed(s.parent as u64));
+            bodies.extend(packed(presence));
+            bodies.extend(record);
+        }
+        // a table ends in a NUL, so an empty one is that alone
+        let strings = |table: &[&str]| -> Vec<u8> {
+            let list: Vec<u8> = table.iter().flat_map(|n| n.bytes().chain([0])).collect();
+            if list.is_empty() { vec![0] } else { list }
+        };
+        let mut payload = section_bytes(b"TSTR", true, &strings(&names));
+        payload.extend(section_bytes(b"TNA1", true, &type_names));
+        payload.extend(section_bytes(b"FSTR", true, &strings(&field_names)));
+        payload.extend(section_bytes(b"TBDY", true, &bodies));
+        if !hashes.is_empty() {
+            let mut table = packed(hashes.len() as u64);
+            for &(type_index, hash) in hashes {
+                table.extend(packed(type_index as u64));
+                table.extend(hash.to_le_bytes());
+            }
+            payload.extend(section_bytes(b"THSH", true, &table));
+        }
+        section_bytes(b"TYPE", false, &payload)
+    }
+
+    fn read(bytes: &[u8]) -> Result<Vec<Type>> {
+        let roots = sections(bytes)?;
+        read_types(*roots.first().expect("one section"))
+    }
+
+    /// An integer type; a base class with a member, a derived class that adds one and an interface; an array type and
+    /// a type taking it as a template parameter.
+    fn mini() -> Vec<Spec> {
+        vec![
+            Spec {
+                name: "u32",
+                format: Some(0x8002),
+                size: Some((4, 4)),
+                ..Spec::default()
+            },
+            Spec {
+                name: "Base",
+                format: Some(7),
+                version: Some(1),
+                size: Some((8, 0x3008)),
+                type_flags: Some(147),
+                fields: vec![("a", 0x20, 0, 1)],
+                ..Spec::default()
+            },
+            Spec {
+                name: "Derived",
+                parent: 2,
+                format: Some(7),
+                version: Some(2),
+                size: Some((16, 8)),
+                fields: vec![("b", 0x20, 8, 1)],
+                interfaces: vec![(5, 8)],
+                ..Spec::default()
+            },
+            Spec {
+                name: "hkArray",
+                format: Some(0x28),
+                subtype: Some(1),
+                size: Some((16, 8)),
+                parameters: vec![("t0", 1), ("v1", 7)],
+                ..Spec::default()
+            },
+            Spec {
+                name: "Iface",
+                format: Some(7),
+                type_flags: Some(16),
+                ..Spec::default()
+            },
+            Spec {
+                name: "Holder",
+                format: Some(7),
+                size: Some((8, 8)),
+                parameters: vec![("t0", 4)],
+                ..Spec::default()
+            },
+        ]
+    }
+
+    /// The hashes of the six types of [`mini`], computed by a separate implementation of the census's recipe (a
+    /// script that encodes the same table itself, parses it and hashes it). Derived's depends on its parent's member,
+    /// an interface and the parent's hash; hkArray's on its subtype; Holder's on the template parameters it nests.
+    const MINI_HASHES: [(usize, u32); 6] = [
+        (1, 0xd9bf3216),
+        (2, 0xc35323a7),
+        (3, 0x1fddaf95),
+        (4, 0x867f4123),
+        (5, 0xb4d8c9bd),
+        (6, 0xadf001aa),
+    ];
+
+    #[test]
+    fn crc_chains_continue_the_crc_32() {
+        // the standard check value of the IEEE CRC-32
+        assert_eq!(crc32_continue(0, b"123456789"), 0xcbf4_3926);
+        assert_eq!(crc32_continue(0, b""), 0);
+        let whole = crc32_continue(0, b"hknpShape");
+        assert_eq!(crc32_continue(crc32_continue(0, b"hkn"), b"pShape"), whole);
+    }
+
+    #[test]
+    fn a_type_table_whose_hashes_follow_from_its_types_is_read() {
+        let types = read(&type_section(&mini(), &MINI_HASHES)).expect("the table");
+        for (i, hash) in MINI_HASHES {
+            assert_eq!(types[i].hash, Some(hash), "type {i}");
+        }
+        // the alignment word is split, the type flags typed
+        let base = &types[2];
+        assert_eq!(
+            (base.size, base.alignment, base.requested_alignment),
+            (Some(8), Some(8), Some(3))
+        );
+        assert_eq!(base.type_flags, Some(TypeFlags(147)));
+        assert!(TypeFlags(147).contains(TypeFlags::OWN_VTABLE | TypeFlags::INTERFACE));
+        assert_eq!(TypeFlags(147).unseen(), 0);
+        assert_eq!(TypeFlags(0x1000).unseen(), 0x1000);
+        assert_eq!(types[3].requested_alignment, Some(0));
+        assert_eq!(types[1].type_flags, None);
+        // a table without hashes, or with some, is read all the same
+        read(&type_section(&mini(), &[])).expect("no THSH");
+        read(&type_section(&mini(), &MINI_HASHES[2..3])).expect("one hash");
+    }
+
+    #[test]
+    fn a_stored_hash_that_the_description_does_not_give_is_refused() {
+        for i in 0..MINI_HASHES.len() {
+            let mut hashes = MINI_HASHES;
+            hashes[i].1 ^= 1;
+            let e = read(&type_section(&mini(), &hashes)).unwrap_err().to_string();
+            assert!(
+                e.contains(&format!("type {} (", hashes[i].0)) && e.contains("stored hash"),
+                "{e}"
+            );
+        }
+    }
+
+    /// Every part of a type's description is in its hash: a table that changes any one of them and keeps the stored
+    /// hashes is refused, naming the first type whose hash it breaks.
+    #[test]
+    fn every_component_of_the_description_is_hashed() {
+        type Change = fn(&mut Vec<Spec>);
+        let changes: [(&str, usize, Change); 14] = [
+            ("parent", 3, |t| t[2].parent = 0),
+            ("interface type", 3, |t| t[2].interfaces[0].0 = 1),
+            ("interface word", 3, |t| t[2].interfaces[0].1 = 9),
+            ("format", 2, |t| t[1].format = Some(5 | 0x20)),
+            ("subtype", 4, |t| t[3].subtype = Some(2)),
+            ("name", 1, |t| t[0].name = "u64"),
+            ("template value", 4, |t| t[3].parameters[1].1 = 8),
+            ("template type", 4, |t| t[3].parameters[0].1 = 2),
+            ("version", 2, |t| t[1].version = Some(2)),
+            ("size", 1, |t| t[0].size = Some((8, 4))),
+            ("alignment", 1, |t| t[0].size = Some((4, 8))),
+            ("requested alignment", 2, |t| t[1].size = Some((8, 8))),
+            ("type flags", 2, |t| t[1].type_flags = Some(3)),
+            ("member offset", 2, |t| t[1].fields[0].2 = 4),
+        ];
+        for (what, first_broken, change) in changes {
+            let mut specs = mini();
+            change(&mut specs);
+            let e = read(&type_section(&specs, &MINI_HASHES)).unwrap_err().to_string();
+            assert!(e.contains(&format!("type {first_broken} (")), "{what}: {e}");
+        }
+        // a parent's member is part of the derived class's hash, and a member's type
+        let mut specs = mini();
+        specs[1].fields[0].0 = "c";
+        let e = read(&type_section(&specs, &MINI_HASHES[2..]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("type 3 ("), "{e}");
+        let mut specs = mini();
+        specs[2].fields[0].3 = 2;
+        let e = read(&type_section(&specs, &MINI_HASHES[2..3]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("type 3 ("), "{e}");
+    }
+
+    #[test]
+    fn a_type_table_that_refers_to_itself_is_hashed_without_recursion_and_without_end() {
+        // a class holding a member of its own type; its stored hash is whatever the table gives
+        let own = vec![Spec {
+            name: "Node",
+            format: Some(7),
+            size: Some((8, 8)),
+            fields: vec![("next", 0x20, 0, 1)],
+            ..Spec::default()
+        }];
+        let e = read(&type_section(&own, &[(1, 0x1234_5678)]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("stored hash"), "{e}");
+        // a chain of members 50,000 types deep: no stack grows with it
+        let n = 50_000;
+        let chain: Vec<Spec> = (1..=n)
+            .map(|i| Spec {
+                name: "Link",
+                format: Some(7),
+                size: Some((8, 8)),
+                fields: vec![("next", 0x20, 0, (i % n) + 1)],
+                ..Spec::default()
+            })
+            .collect();
+        let e = read(&type_section(&chain, &[(1, 0)])).unwrap_err().to_string();
+        assert!(e.contains("stored hash"), "{e}");
+        // template parameters that name each other are stopped
+        let looped = vec![Spec {
+            name: "Loop",
+            format: Some(7),
+            parameters: vec![("t0", 1), ("t1", 1)],
+            ..Spec::default()
+        }];
+        let e = read(&type_section(&looped, &[(1, 0)])).unwrap_err().to_string();
+        assert!(e.contains("template parameters"), "{e}");
+    }
+
+    #[test]
+    fn the_alignment_word_has_nothing_above_bit_15() {
+        let mut specs = mini();
+        specs[0].size = Some((4, 0x1_0004));
+        let e = read(&type_section(&specs, &[])).unwrap_err().to_string();
+        assert!(e.contains("alignment word"), "{e}");
+        specs[0].size = Some((4, 0xF010));
+        let types = read(&type_section(&specs, &[])).expect("bits 12 to 15 are the requested alignment");
+        assert_eq!(
+            (types[1].alignment, types[1].requested_alignment),
+            (Some(16), Some(15))
+        );
+        // type flags wider than 32 bits are not flags
+        let mut specs = mini();
+        specs[1].type_flags = Some(1 << 32);
+        assert!(read(&type_section(&specs, &[])).is_err());
     }
 
     #[test]

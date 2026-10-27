@@ -86,10 +86,12 @@ impl AnimationType {
 }
 
 /// `hkaDefaultAnimatedReferenceFrame`: the motion of the animation's reference frame (its root motion), sampled.
+///
+/// Its `frameType` member is not read: Sekiro's type tables mark it as a member that is not serialised (the member
+/// flags 0x21 where a stored member has 0x20), and it is 0 in all 27,470 reference frames of Sekiro (6,864) and Elden
+/// Ring (20,606), so it carries no data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferenceFrame {
-    /// `frameType`, as stored.
-    pub frame_type: u32,
     /// `up`: the up axis, `x y z` and a padding lane.
     pub up: [f32; 4],
     /// `forward`: the forward axis, `x y z` and a padding lane.
@@ -278,7 +280,6 @@ pub(crate) fn skeleton(v: Value<'_, '_>) -> Result<Skeleton> {
 
 fn reference_frame(v: Value<'_, '_>) -> Result<ReferenceFrame> {
     Ok(ReferenceFrame {
-        frame_type: small(v.field("frameType")?)?,
         up: v.field("up")?.vector::<4>()?,
         forward: v.field("forward")?.vector::<4>()?,
         duration: v.field("duration")?.float()?,

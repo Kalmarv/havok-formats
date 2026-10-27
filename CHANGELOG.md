@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+The checks that a census of every Sekiro and Elden Ring tagfile, type table and spline animation settled. Each new
+refusal is of an input none of those files has: a read of both installs (19,137 + 68,722 distinct tagfiles, 16 + 36
+compendia, 10,876 + 38,769 spline animations in the animation binders) accepts every one of them.
+
+- Breaking: the type hash of every type that stores one (the THSH section) is checked against the hash the type's
+  description gives, a chained CRC-32 over its parent, interfaces, format word, name, template parameters, version,
+  size and alignment word, type flags and members (inherited ones included). Reproduced for all 20,180 stored hashes of
+  Sekiro's 229 distinct type tables and all 90,033 of Elden Ring's 875; a mismatch is a refusal naming the type.
+- Breaking: `Type::alignment` is the alignment (the low 12 bits of the stored word) and `Type::requested_alignment` the
+  requested alignment (bits 12 to 15; 3 on `hkCompressedMassProperties`, 15 on `hkpConstraintAtom`, 0 on every other
+  type); a word with bits above 15 is refused.
+- Breaking: `Type::abstract_value: Option<u64>` is `Type::type_flags: Option<TypeFlags>`, the type's flags word as a
+  bit set (presence bit 16 of `Type::flags` means "a flags word follows"). `TypeFlags` names the bits the two games
+  store (1, 2, 16, 64, 128, 256).
+- Breaking: `Item::flags: u8` is `Item::kind: ItemKind` (`Null`, `Object` for byte `0x10`, `Run` for `0x20`). Any other
+  byte, or a nonzero byte on the null item, is refused.
+- Breaking: `SDK_VERSIONS` has `20150100` (Sekiro's `c1090` clip `a000_205000`); the file's own type table gives its
+  layouts, which differ from 2016.2's.
+- A pointer, string or array slot is refused unless the bytes after its four-byte item index are zero (the size and
+  capacity words of an `hkArray`, the high half of an eight-byte pointer).
+- Breaking: `ReferenceFrame::frame_type` is gone: `frameType` is not serialised, and its stored value is 0 in every
+  reference frame of both installs.
+- Breaking: `RotationQuantization::Polar32` is gone and rotation quantization 0 is refused like 3 and 4: no transform
+  track of either install selects it.
+- `SplineAnimation::parse` accepts spline degrees 1 to 3 only (the games' files have degrees 1 and 3), refuses a
+  `maskAndQuantizationSize` that is not the masks of the tracks, and accepts the 16 zero bytes after a block only after
+  the animation's last block, whose last track's rotation is 40-bit and ends within two bytes of the block's padded end
+  (4,975 Elden Ring blocks; no other block of either game has them).
+- Tests: a hand-built type table whose hashes are the census recipe's (every component of the description changes its
+  hash), a table that refers to itself, item kind bytes, reference slots with bytes after the index, a degree sweep, the
+  mask size, and the trailing-byte rule with its negatives. A real-data test (`tests/sdk2015.rs`, input
+  `corpus.sekiro/havok-2015`, skipped without it) reads the one 2015.1 clip.
+
 ## 0.3.0 (2026-10-27)
 
 A fix to the shared vertices of the `l` collision sets, and the checks a census of every Sekiro and Elden Ring

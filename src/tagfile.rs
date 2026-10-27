@@ -6,9 +6,22 @@
 use crate::types::{Cursor, read_types, required};
 use crate::{Compendium, Result, Type, invalid, sections};
 
-/// SDK versions whose tagfile layout this reader knows: 2016.2 and 2018.1. Both store the same section tree and the
-/// same item and patch tables; class layouts come from each file's own type metadata.
-pub const SDK_VERSIONS: [[u8; 8]; 2] = [*b"20160200", *b"20180100"];
+/// SDK versions whose tagfile layout this reader knows: 2015.1, 2016.2 and 2018.1. All store the same section tree and
+/// the same item and patch tables; class layouts come from each file's own type metadata, and they differ between the
+/// SDKs (a 2015.1 `hkReferencedObject` is 16 bytes, a 2016.2 one 24). Sekiro holds one 2015.1 file, an animation clip;
+/// its other tagfiles are 2016.2, and Elden Ring's are 2018.1 beside 42 of 2016.2.
+pub const SDK_VERSIONS: [[u8; 8]; 3] = [*b"20150100", *b"20160200", *b"20180100"];
+
+/// What an item holds, from the top nibble of the byte stored beside its type index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemKind {
+    /// The null item, item 0.
+    Null,
+    /// Byte `0x10`: one object, the root or what a pointer refers to (a count of 1 in every item of both installs).
+    Object,
+    /// Byte `0x20`: a run of elements, what an array or a string refers to (any count).
+    Run,
+}
 
 /// One entry of the tagfile's item table: `count` consecutive elements of one type at `offset` in DATA. Item 0 is
 /// the null item; item 1 holds the root object.
@@ -16,8 +29,10 @@ pub const SDK_VERSIONS: [[u8; 8]; 2] = [*b"20160200", *b"20180100"];
 pub struct Item {
     /// Index into [`Tagfile::types`] (one-based; never 0 for an item after the null item).
     pub type_index: usize,
-    /// The flags byte stored beside the type index, as stored.
-    pub flags: u8,
+    /// What the item holds. The byte stored beside the type index is `0x10` or `0x20` on every item of Sekiro's
+    /// 2,831,175 and Elden Ring's 7,330,933 and `0` on the null item; the low nibble (flags) is `0` in all of them,
+    /// and any other byte is refused.
+    pub kind: ItemKind,
     /// Byte offset of the first element in DATA.
     pub offset: usize,
     /// Number of elements.
@@ -99,15 +114,34 @@ impl<'a> Tagfile<'a> {
             return Err(invalid(table.offset, "partial item record"));
         }
         let mut items = Vec::new();
-        for &[t0, t1, t2, flags, o0, o1, o2, o3, n0, n1, n2, n3] in table.payload.as_chunks::<12>().0 {
-            // a little-endian word: the type index in the low 24 bits, the flags in the top byte
+        for (i, &[t0, t1, t2, kind, o0, o1, o2, o3, n0, n1, n2, n3]) in
+            table.payload.as_chunks::<12>().0.iter().enumerate()
+        {
+            // a little-endian word: the type index in the low 24 bits, the kind in the top byte
             let type_index = u32::from_le_bytes([t0, t1, t2, 0]) as usize;
             if type_index >= types.len() {
                 return Err(invalid(table.offset, "item type out of bounds"));
             }
+            let kind = match (i, kind) {
+                (0, 0) => ItemKind::Null,
+                (1.., 0x10) => ItemKind::Object,
+                (1.., 0x20) => ItemKind::Run,
+                _ => {
+                    return Err(invalid(
+                        // the record's fourth byte: 8 bytes of section header, 12 bytes a record
+                        table
+                            .offset
+                            .saturating_add(i.saturating_mul(12))
+                            .saturating_add(11),
+                        format!(
+                            "item {i}: kind byte {kind:#x}; only 0x10 (object) and 0x20 (run) are stored, and 0 on the null item"
+                        ),
+                    ));
+                }
+            };
             items.push(Item {
                 type_index,
-                flags,
+                kind,
                 offset: u32::from_le_bytes([o0, o1, o2, o3]) as usize,
                 count: u32::from_le_bytes([n0, n1, n2, n3]) as usize,
             });

@@ -25,6 +25,12 @@ primase_testdata::inputs! {
             about: r#"one area's high-resolution map collision as its binder stores it: loose Havok 2016.2 tagfiles (`.hkx`) and the type compendium they share (`.compendium`), every body and compressed mesh read by tests/corpus.rs"#,
             source: r#"the game's own files from the user's install: the area's `h*.hkxbhd`/`.hkxbdt` binder with each member taken out of its DCX envelope, as [corpus_sekiro_havok.rs](https://github.com/Kalmarv/primase/tree/main/worlds/fromsoft/examples/corpus_sekiro_havok.rs) in primase does"#,
         },
+        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-2015") => {
+            status: Live,
+            gate: false,
+            about: r#"the one SDK 2015.1 tagfile of the Sekiro install (`c1090`'s clip `a000_205000`: 54 transform tracks, 36 frames), loose; tests/sdk2015.rs reads it"#,
+            source: r#"the game's own file from the user's install: the member of `chr/c1090.anibnd.dcx` out of its DCX envelope, found by reading every Havok tagfile of the install for the SDK string `20150100`"#,
+        },
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-l") => {
             status: Live,
             gate: false,

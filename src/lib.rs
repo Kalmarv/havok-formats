@@ -5,7 +5,7 @@
 //!
 //! # What it reads
 //!
-//! - **Tagfiles** (`TAG0`, SDK versions 2016.2 and 2018.1, see [`SDK_VERSIONS`]) and their external type compendia
+//! - **Tagfiles** (`TAG0`, SDK versions 2015.1, 2016.2 and 2018.1, see [`SDK_VERSIONS`]) and their external type compendia
 //!   (`TCM0`): [`Tagfile`] and [`Compendium`]. Class layouts come from the file's own type metadata, so any class
 //!   can be read field by field through [`Value`] and [`Array`].
 //! - **Packfiles** (version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian): [`packfile`].
@@ -93,8 +93,8 @@ pub use mesh::{
 mod tagfile;
 mod types;
 mod value;
-pub use tagfile::{Item, SDK_VERSIONS, Tagfile};
-pub use types::{Compendium, Field, Type};
+pub use tagfile::{Item, ItemKind, SDK_VERSIONS, Tagfile};
+pub use types::{Compendium, Field, Type, TypeFlags};
 pub use value::{Array, Value};
 
 pub use section::{Section, sections};

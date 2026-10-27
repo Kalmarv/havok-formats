@@ -170,8 +170,31 @@ impl<'t, 'a> Value<'t, 'a> {
             format!("{} has no field {name}", self.type_name()),
         ))
     }
+    /// The item index a pointer, string or array slot stores. A slot is the index in its first four bytes and zeros
+    /// in the rest (an `hkArray`'s size and capacity words included, which the loader fills in from the item):
+    /// every slot of Sekiro's and Elden Ring's tagfiles is that, and any other is refused.
     fn reference_index(self) -> Result<usize> {
-        Ok(u32::from_le_bytes(self.tag.array(self.offset)?) as usize)
+        let size = self.tag.stride(self.type_index)?;
+        let slot = self.tag.bytes(self.offset, size)?;
+        let Some((index, rest)) = slot.split_first_chunk::<4>() else {
+            return Err(invalid(
+                self.at(),
+                format!(
+                    "a {} slot of {size} bytes cannot hold an item index",
+                    self.type_name()
+                ),
+            ));
+        };
+        if rest.iter().any(|&b| b != 0) {
+            return Err(invalid(
+                self.at().saturating_add(4),
+                format!(
+                    "bytes 4..{size} of a {} slot are not zero; only the item index is stored",
+                    self.type_name()
+                ),
+            ));
+        }
+        Ok(u32::from_le_bytes(*index) as usize)
     }
     /// The object a pointer value refers to; `None` for a null pointer.
     pub fn pointer(self) -> Result<Option<Self>> {

@@ -4,7 +4,7 @@ A Rust library that reads Havok physics and animation data as games store it: ta
 
 ## What it reads
 
-- **Tagfiles** (`TAG0`), SDK versions **2016.2** and **2018.1**, and their external type compendia (`TCM0`). Class layouts come from each file's own type metadata, so any class can be read field by field.
+- **Tagfiles** (`TAG0`), SDK versions **2015.1**, **2016.2** and **2018.1**, and their external type compendia (`TCM0`). Class layouts come from each file's own type metadata, so any class can be read field by field.
 - **Packfiles** (the older `0x57E0E057 0x10C0C010` container), version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian.
 - **Objects**, read by class from those files:
   - `hknp` compressed meshes (triangles, dead primitives, custom primitives, extern shape instances) and convex shapes;
