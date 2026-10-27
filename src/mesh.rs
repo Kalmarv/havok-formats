@@ -54,6 +54,9 @@ pub struct ShapeInstance<'t, 'a> {
     pub shape: Value<'t, 'a>,
 }
 
+/// How many shared vertices a page of a section's 16-bit shared-vertex index entries addresses.
+const PAGE_SIZE: usize = 1 << 16;
+
 /// The first word of a custom primitive that references an extern shape.
 const EXTERN_SHAPE_TAG: u32 = 146;
 
@@ -160,6 +163,10 @@ pub struct MeshSection {
     pub packed_vertices: usize,
     /// The section's first entry of the shared-vertex index.
     pub first_shared_vertex: usize,
+    /// The section's page: its shared-vertex index entries are 16 bits, and the shared vertex one names is
+    /// `sharedVertices[page * 65536 + entry]`. Zero in every section but some of the `l` collision sets' (pages 1 to
+    /// 4, where a tree has more than 65,536 shared vertices).
+    pub page: usize,
     /// How many entries of the shared-vertex index the section has: vertex indices from `packed_vertices` on reach
     /// them.
     pub shared_indices: usize,
@@ -167,12 +174,38 @@ pub struct MeshSection {
     pub first_primitive: usize,
     /// How many primitives the section has.
     pub primitives: usize,
+    /// The section's `domain` box, minimum then maximum (xyz): the box of its triangle vertices grown by the shape's
+    /// convex radius in the Sekiro and Elden Ring map meshes.
+    pub domain: [[f32; 3]; 2],
 }
 /// An unsigned stored value as an index; a refusal at `at` when it does not fit the platform's `usize`.
 fn index(value: Value<'_, '_>, at: usize) -> Result<usize> {
     let stored = value.unsigned()?;
     usize::try_from(stored)
         .map_err(|_| invalid(at, format!("expected an index that fits usize, found {stored}")))
+}
+
+/// The `min` and `max` (xyz) of an `hkAabb` value.
+fn aabb(v: Value<'_, '_>) -> Result<[[f32; 3]; 2]> {
+    let min = v.field("min")?.vector::<4>()?;
+    let max = v.field("max")?.vector::<4>()?;
+    Ok([[min[0], min[1], min[2]], [max[0], max[1], max[2]]])
+}
+
+/// The element array `name` of a mesh tree, refused unless its elements are `bytes` wide. The decoders read an element
+/// as the one integer width the Sekiro and Elden Ring trees store (`packedVertices` 4 bytes, `sharedVertices` 8,
+/// `sharedVerticesIndex` 2, which the section page arithmetic relies on); a tree with another width (a different
+/// `hkcdStaticMeshTree` configuration) would decode to wrong vertices without a sign.
+fn array_of_width<'t, 'a>(tree: Value<'t, 'a>, name: &str, bytes: usize) -> Result<crate::Array<'t, 'a>> {
+    let field = tree.field(name)?;
+    let width = field.element_size()?;
+    if width != bytes {
+        return Err(invalid(
+            field.at(),
+            format!("{name} has elements of {width} bytes, not the {bytes} this reader decodes"),
+        ));
+    }
+    field.array()
 }
 
 /// The sections of an hknpCompressedMeshShapeData mesh tree, as its SDK version names their ranges.
@@ -273,9 +306,11 @@ pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
             first_packed_vertex,
             packed_vertices,
             first_shared_vertex,
+            page: field("page")?,
             shared_indices,
             first_primitive,
             primitives,
+            domain: aabb(section.field("domain")?)?,
         });
     }
     for (what, end, len) in [
@@ -303,19 +338,19 @@ pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
 
 /// Decode an hknpCompressedMeshShapeData mesh tree. Materials and rigid-body
 /// transforms belong to the caller. Packed section vertices are 11/11/10 bits;
-/// shared vertices are 21/21/22 bits over the declared domain. Custom primitives
+/// shared vertices are 21/21/22 bits over the declared domain, and a section's shared-vertex index entries address
+/// them from its [`MeshSection::page`] times 65,536 on. Custom primitives
 /// are listed ([`CustomPrimitive`]), not decoded.
+///
+/// The tree must store its vertex arrays in the one configuration the Sekiro and Elden Ring collision uses (4-byte
+/// `packedVertices`, 8-byte `sharedVertices`, 16-bit `sharedVerticesIndex`): another width is refused.
 pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
     let tree = data.field("meshTree")?;
-    let domain = tree.field("domain")?;
-    let min = domain.field("min")?.vector::<4>()?;
-    let max = domain.field("max")?.vector::<4>()?;
-    let min = [min[0], min[1], min[2]];
-    let max = [max[0], max[1], max[2]];
+    let [min, max] = aabb(tree.field("domain")?)?;
     let primitives = tree.field("primitives")?.array()?;
-    let packed = tree.field("packedVertices")?.array()?;
-    let shared = tree.field("sharedVertices")?.array()?;
-    let shared_indices = tree.field("sharedVerticesIndex")?.array()?;
+    let packed = array_of_width(tree, "packedVertices", 4)?;
+    let shared = array_of_width(tree, "sharedVertices", 8)?;
+    let shared_indices = array_of_width(tree, "sharedVerticesIndex", 2)?;
     let sections = tree.field("sections")?.array()?;
     let ranges = mesh_sections(data)?;
     let mut result = CompressedMesh::default();
@@ -326,9 +361,11 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
             first_packed_vertex: first,
             packed_vertices: local_count,
             first_shared_vertex: shared_base,
+            page,
             shared_indices: shared_count,
             first_primitive: start,
             primitives: count,
+            domain: _,
         } = range;
         let offset = [codec[0], codec[1], codec[2]];
         let scale = [codec[3], codec[4], codec[5]];
@@ -358,7 +395,11 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
                     .checked_sub(local_count)
                     .and_then(|i| i.checked_add(shared_base))
                     .ok_or_else(|| invalid(section.at(), "shared vertex index overflow"))?;
-                let position = self::index(shared_indices.get(position)?, section.at())?;
+                let entry = self::index(shared_indices.get(position)?, section.at())?;
+                let position = page
+                    .checked_mul(PAGE_SIZE)
+                    .and_then(|base| base.checked_add(entry))
+                    .ok_or_else(|| invalid(section.at(), "shared vertex page overflow"))?;
                 primase_foundations::vertex::packed_position64(shared.get(position)?.unsigned()?, min, max)
                     .map_err(|e| invalid(section.at(), e.to_string()))
             }

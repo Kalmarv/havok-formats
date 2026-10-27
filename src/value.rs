@@ -217,6 +217,21 @@ impl<'t, 'a> Value<'t, 'a> {
         }
         Err(invalid(self.at(), "expected a string ending in a zero byte"))
     }
+    /// The size in bytes of one element of an array value, as the element type's metadata gives it: the same whether
+    /// the array stores elements or is empty.
+    pub fn element_size(self) -> Result<usize> {
+        if self.format()? & 15 != 8 {
+            return Err(invalid(
+                self.at(),
+                format!("expected an array, not a {}", self.type_name()),
+            ));
+        }
+        let element = self.tag.inherited(self.type_index, |t| t.subtype)?;
+        if element == 0 {
+            return Err(invalid(self.at(), "expected an array with an element type"));
+        }
+        self.tag.stride(element)
+    }
     /// The elements of an array value (a stored array or a fixed-size one).
     pub fn array(self) -> Result<Array<'t, 'a>> {
         let format = self.format()?;
