@@ -944,11 +944,11 @@ mod tests {
         // each block's float offset counts from the block's own start
         let a = animation(d, 1, &[(0, first_end), (second, first_end)], 3, 5);
         let s = SplineAnimation::parse(&a).unwrap();
-        assert_eq!(s.locate(0.5), (0, 0.5));
-        assert_eq!(s.locate(1.9), (0, 1.9));
-        assert_eq!(s.locate(2.0), (1, 0.0));
-        assert_eq!(s.locate(4.0), (1, 2.0));
-        assert_eq!(s.locate(99.0), (1, 2.0));
+        assert_eq!(s.locate(0.5).unwrap(), (0, 0.5));
+        assert_eq!(s.locate(1.9).unwrap(), (0, 1.9));
+        assert_eq!(s.locate(2.0).unwrap(), (1, 0.0));
+        assert_eq!(s.locate(4.0).unwrap(), (1, 2.0));
+        assert_eq!(s.locate(99.0).unwrap(), (1, 2.0));
         assert_eq!(s.sample(0, 1.5, &IDENTITY, MIXED).unwrap().translation[0], 1.0);
         assert_eq!(s.sample(0, 3.0, &IDENTITY, MIXED).unwrap().translation[0], 2.0);
     }
