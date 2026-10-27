@@ -152,11 +152,15 @@ const SECTION_LAYOUTS: [([u8; 8], SectionLayout); 2] = [
 pub struct MeshSection {
     /// The dequantisation offset (xyz) and scale (xyz) of the section's packed vertices.
     pub codec: [f32; 6],
+    /// Index of the section's first packed vertex in the tree's packed-vertex array.
     pub first_packed_vertex: usize,
+    /// How many packed vertices the section has.
     pub packed_vertices: usize,
     /// The section's first entry of the shared-vertex index.
     pub first_shared_vertex: usize,
+    /// Index of the section's first primitive in the tree's primitive array.
     pub first_primitive: usize,
+    /// How many primitives the section has.
     pub primitives: usize,
 }
 /// An unsigned stored value as an index; a refusal at `at` when it does not fit the platform's `usize`.

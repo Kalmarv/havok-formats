@@ -221,8 +221,11 @@ impl RigidBody {
 /// other bits are opaque flags), `b` is `0x3F80` in all data, `c` is padding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeshMaterial {
+    /// The whole per-triangle word.
     pub a: u32,
+    /// `0x3F80` in all data.
     pub b: u32,
+    /// Padding.
     pub c: u32,
 }
 
@@ -235,6 +238,7 @@ pub struct Subpart {
     pub triangles: Vec<[u32; 3]>,
     /// Per triangle, an index into `materials`.
     pub material_indices: Vec<u16>,
+    /// The material records the triangles index.
     pub materials: Vec<MeshMaterial>,
     /// Cumulative triangle count of the earlier subparts.
     pub triangle_offset: usize,
@@ -468,34 +472,57 @@ impl ConvexVertices {
 pub enum Shape {
     /// A MOPP tree; its code is not decoded. The child holds the geometry.
     Mopp {
+        /// Data-section offset of the child shape (`hkpMoppBvTreeShape`, the pointer at 0x34).
         child: usize,
     },
+    /// An `hkpStorageExtendedMeshShape`.
     ExtendedMesh(ExtendedMesh),
+    /// An `hkpConvexVerticesShape`.
     ConvexVertices(ConvexVertices),
+    /// An `hkpBoxShape`.
     Box {
+        /// The shape's convex radius (at 0x10).
         radius: f32,
+        /// The half extents `xyz` (at 0x20).
         half_extents: [f32; 3],
     },
+    /// An `hkpSphereShape`.
     Sphere {
+        /// The sphere's radius (at 0x10).
         radius: f32,
     },
+    /// An `hkpCapsuleShape`.
     Capsule {
+        /// The capsule's radius (at 0x10).
         radius: f32,
+        /// One end of the axis, shape-local (at 0x20).
         a: [f32; 3],
+        /// The other end of the axis, shape-local (at 0x30).
         b: [f32; 3],
     },
+    /// An `hkpCylinderShape`.
     Cylinder {
+        /// The shape's convex radius (at 0x10).
         radius: f32,
+        /// The cylinder's radius (at 0x14).
         cylinder_radius: f32,
+        /// The value stored at 0x18, as stored.
         base_radius_factor: f32,
+        /// One end of the axis, shape-local (at 0x20).
         a: [f32; 3],
+        /// The other end of the axis, shape-local (at 0x30).
         b: [f32; 3],
     },
+    /// An `hkpConvexTranslateShape`: a child shape moved by a translation.
     ConvexTranslate {
+        /// Data-section offset of the child shape (the pointer at 0x18).
         child: usize,
+        /// The translation `xyz` (at 0x20).
         translation: [f32; 3],
     },
+    /// An `hkpListShape`.
     List {
+        /// Data-section offsets of the child shapes, in the stored order.
         children: Vec<usize>,
     },
 }

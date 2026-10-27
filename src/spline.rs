@@ -50,6 +50,7 @@ use primase_foundations::bytes::Endian;
 /// The knots and degree a spline track's control points are evaluated with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Knots {
+    /// The degree of the spline (the stored byte).
     pub degree: u8,
     /// Frames within the block, `points + degree + 1` of them, not decreasing.
     pub values: Vec<u8>,
@@ -60,6 +61,7 @@ pub struct Knots {
 pub enum Component {
     /// Neither static nor spline: the caller's default stands.
     Absent,
+    /// A constant, stored as an f32.
     Static(f32),
     /// The control points (decoded to f32), evaluated with the track's knots.
     Spline(Vec<f32>),
@@ -70,19 +72,26 @@ pub enum Component {
 pub struct Vector {
     /// Present when any component is a spline.
     pub knots: Option<Knots>,
+    /// The x component.
     pub x: Component,
+    /// The y component.
     pub y: Component,
+    /// The z component.
     pub z: Component,
 }
 
+/// A rotation, by what the track's mask states of it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Rotation {
-    /// The identity.
+    /// Neither flag set: the caller's [`Fallback`] stands (neutral is the identity).
     Absent,
     /// A quaternion `x y z w`, as decoded from its quantization.
     Static([f32; 4]),
+    /// Control points evaluated with knots.
     Spline {
+        /// The knots the points are evaluated with.
         knots: Knots,
+        /// The control points, each a quaternion `x y z w` decoded from its quantization.
         points: Vec<[f32; 4]>,
     },
 }
@@ -100,8 +109,11 @@ pub enum Fallback {
 /// files say).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Absent {
+    /// What stands in for an absent position component.
     pub position: Fallback,
+    /// What stands in for an absent rotation.
     pub rotation: Fallback,
+    /// What stands in for an absent scale component.
     pub scale: Fallback,
 }
 
@@ -123,17 +135,24 @@ impl Absent {
 /// One transform track of one block.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track {
+    /// The position, `xyz`.
     pub position: Vector,
+    /// The rotation.
     pub rotation: Rotation,
+    /// The scale, `xyz`.
     pub scale: Vector,
 }
 
 /// How a rotation is stored (`RotationQuantization`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RotationQuantization {
+    /// Code 0: 32 bits a quaternion, 4-byte aligned.
     Polar32,
+    /// Code 1: 40 bits a quaternion, byte aligned.
     ThreeComp40,
+    /// Code 2: 48 bits a quaternion, 2-byte aligned.
     ThreeComp48,
+    /// Code 5: four f32, 4-byte aligned.
     Uncompressed,
 }
 
@@ -479,7 +498,9 @@ fn rotation(r: &mut Reader, flags: u8, code: u8) -> Result<Rotation> {
 /// component is [`Component::Absent`], so the caller's `absent` stands for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unreadable {
+    /// Index of the block.
     pub block: usize,
+    /// Index of the transform track within the block.
     pub track: usize,
     /// `position x`, `scale z`, ...
     pub part: &'static str,
@@ -493,9 +514,13 @@ pub struct SplineAnimation {
     /// The vector components whose stored value or quantisation range is not finite, which [`Self::sample`] takes as
     /// absent.
     pub unreadable: Vec<Unreadable>,
+    /// The animation's `duration` in seconds.
     pub duration: f32,
+    /// `numFrames`.
     pub num_frames: u32,
+    /// `maxFramesPerBlock`.
     pub max_frames_per_block: u32,
+    /// `frameDuration` in seconds.
     pub frame_duration: f32,
 }
 

@@ -13,8 +13,11 @@ use crate::{Result, Tagfile, Value, invalid};
 /// of a translation or scale is padding).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QsTransform {
+    /// `translation`: `x y z` and a padding lane.
     pub translation: [f32; 4],
+    /// `rotation`: a unit quaternion `x y z w`.
     pub rotation: [f32; 4],
+    /// `scale`: `x y z` and a padding lane.
     pub scale: [f32; 4],
 }
 
@@ -30,25 +33,36 @@ pub struct Bone {
 /// `hkaSkeleton`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Skeleton {
+    /// `name`.
     pub name: String,
     /// One a bone: the parent's index, or -1 for a root.
     pub parents: Vec<i16>,
+    /// `bones`: one entry a bone, in the order `parents` and `reference_pose` follow.
     pub bones: Vec<Bone>,
     /// One a bone: its local transform at rest.
     pub reference_pose: Vec<QsTransform>,
+    /// `referenceFloats`: the rest value of each float slot.
     pub reference_floats: Vec<f32>,
+    /// `floatSlots`: the name of each float slot, which the float tracks of a binding drive.
     pub float_slots: Vec<String>,
 }
 
 /// `hkaAnimation::AnimationType`, as the file's `type` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimationType {
+    /// Value 0.
     Unknown,
+    /// Value 1: `hkaInterleavedUncompressedAnimation`.
     Interleaved,
+    /// Value 2.
     Mirrored,
+    /// Value 3: `hkaSplineCompressedAnimation`.
     SplineCompressed,
+    /// Value 4.
     Quantized,
+    /// Value 5.
     Predictive,
+    /// Value 6.
     ReferenceFrame,
     /// A value the SDK's enumeration does not have.
     Other(u32),
@@ -72,9 +86,13 @@ impl AnimationType {
 /// `hkaDefaultAnimatedReferenceFrame`: the motion of the animation's reference frame (its root motion), sampled.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferenceFrame {
+    /// `frameType`, as stored.
     pub frame_type: u32,
+    /// `up`: the up axis, `x y z` and a padding lane.
     pub up: [f32; 4],
+    /// `forward`: the forward axis, `x y z` and a padding lane.
     pub forward: [f32; 4],
+    /// `duration` in seconds.
     pub duration: f32,
     /// `x y z` and the rotation about `up` in the fourth, one a sample over `duration`.
     pub samples: Vec<[f32; 4]>,
@@ -83,32 +101,49 @@ pub struct ReferenceFrame {
 /// What `hkaSplineCompressedAnimation` stores besides its header: the blocks of compressed tracks, as stored.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplineData {
+    /// `numFrames`: the frames of the whole animation.
     pub num_frames: u32,
+    /// `numBlocks`: how many blocks the frames are cut into.
     pub num_blocks: u32,
+    /// `maxFramesPerBlock`: the most frames one block holds.
     pub max_frames_per_block: u32,
+    /// `maskAndQuantizationSize`, as stored; [`crate::spline`] does not use it.
     pub mask_and_quantization_size: u32,
+    /// `blockDuration`: seconds one block spans.
     pub block_duration: f32,
+    /// `blockInverseDuration`, as stored (nominally the reciprocal of `block_duration`).
     pub block_inverse_duration: f32,
+    /// `frameDuration`: seconds between frames.
     pub frame_duration: f32,
+    /// `blockOffsets`: the byte offset in `data` at which each of the `num_blocks` blocks starts (16-byte aligned).
     pub block_offsets: Vec<u32>,
+    /// `floatBlockOffsets`: for each block, the byte offset of its float data counted from the block's own start.
     pub float_block_offsets: Vec<u32>,
+    /// `transformOffsets`, as stored; [`crate::spline`] does not use it.
     pub transform_offsets: Vec<u32>,
+    /// `floatOffsets`, as stored; [`crate::spline`] does not use it.
     pub float_offsets: Vec<u32>,
+    /// `data`: the compressed bytes of every block, unmodified.
     pub data: Vec<u8>,
+    /// `endian`: 0 for little-endian `data`; [`crate::spline`] refuses any other value.
     pub endian: i32,
 }
 
 /// `hkaInterleavedUncompressedAnimation`: the transforms of every track at every sample, track-major within a sample.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InterleavedData {
+    /// `transforms`: `transform_tracks` transforms for each sample.
     pub transforms: Vec<QsTransform>,
+    /// `floats`: `float_tracks` values for each sample.
     pub floats: Vec<f32>,
 }
 
 /// How an animation stores its tracks.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tracks {
+    /// A `hkaSplineCompressedAnimation`; see [`crate::spline`] to decode it.
     Spline(SplineData),
+    /// A `hkaInterleavedUncompressedAnimation`.
     Interleaved(InterleavedData),
     /// A class this reader does not read the tracks of (its name): the header is still read.
     Unread(String),
@@ -119,33 +154,47 @@ pub enum Tracks {
 pub struct Animation {
     /// The class of the object (`hkaSplineCompressedAnimation`).
     pub class: String,
+    /// `type`.
     pub kind: AnimationType,
+    /// `duration` in seconds.
     pub duration: f32,
+    /// `numberOfTransformTracks`.
     pub transform_tracks: usize,
+    /// `numberOfFloatTracks`.
     pub float_tracks: usize,
+    /// `extractedMotion`: the root motion, or `None` when the pointer is null.
     pub extracted_motion: Option<ReferenceFrame>,
     /// The name of each annotation track (one a transform track).
     pub annotation_tracks: Vec<String>,
+    /// The tracks, by the object's class.
     pub tracks: Tracks,
 }
 
 /// `hkaAnimationBinding`: which bone of a skeleton each track of an animation drives.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
+    /// `originalSkeletonName`: the name of the skeleton the animation was authored for.
     pub original_skeleton_name: String,
     /// Index into [`Container::animations`] of the animation it binds, when the container holds it.
     pub animation: Option<usize>,
+    /// `transformTrackToBoneIndices`: the index into [`Skeleton::bones`] each transform track drives.
     pub transform_track_to_bone: Vec<i16>,
+    /// `floatTrackToFloatSlotIndices`: the index into [`Skeleton::float_slots`] each float track drives.
     pub float_track_to_slot: Vec<i16>,
+    /// `partitionIndices`, as stored.
     pub partition_indices: Vec<i16>,
+    /// `blendHint`, as stored.
     pub blend_hint: u32,
 }
 
 /// `hkaAnimationContainer`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Container {
+    /// `skeletons`.
     pub skeletons: Vec<Skeleton>,
+    /// `animations`.
     pub animations: Vec<Animation>,
+    /// `bindings`.
     pub bindings: Vec<Binding>,
 }
 

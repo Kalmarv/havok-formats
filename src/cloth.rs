@@ -14,16 +14,22 @@ use crate::{Result, Tagfile, Value, invalid};
 /// `hclSimClothData::ParticleData`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Particle {
+    /// `mass`.
     pub mass: f32,
+    /// `invMass`, as stored (nominally the reciprocal of `mass`).
     pub inv_mass: f32,
+    /// `radius`.
     pub radius: f32,
+    /// `friction`.
     pub friction: f32,
 }
 
 /// A rest pose of the particles (`hclSimClothPose`): one position (`x y z w`, as stored) a particle.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pose {
+    /// `name`.
     pub name: String,
+    /// `positions`: `x y z` and the fourth lane as stored, one for each particle.
     pub positions: Vec<[f32; 4]>,
 }
 
@@ -32,7 +38,9 @@ pub struct Pose {
 /// `stretchMaxLength` and `stretchStiffness`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Link {
+    /// `particleA`: a particle index.
     pub particle_a: u32,
+    /// `particleB`: a particle index.
     pub particle_b: u32,
     /// `restLength` (a bend link's `bendMinLength`).
     pub rest_length: f32,
@@ -47,10 +55,15 @@ pub struct Link {
 /// One entry of a local range constraint set (`hclLocalRangeConstraintSet::LocalConstraint`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LocalRange {
+    /// `particleIndex`: a particle index.
     pub particle: u32,
+    /// `referenceVertex`: the vertex index the particle is limited relative to.
     pub reference_vertex: u32,
+    /// `maximumDistance`.
     pub maximum_distance: f32,
+    /// `maxNormalDistance`.
     pub max_normal_distance: f32,
+    /// `minNormalDistance`.
     pub min_normal_distance: f32,
 }
 
@@ -59,36 +72,57 @@ pub struct LocalRange {
 pub enum ConstraintSet {
     /// `hclStandardLinkConstraintSet`, `hclStretchLinkConstraintSet`, `hclCompressibleLinkConstraintSet` or
     /// `hclBendLinkConstraintSet`: the class and its links.
-    Links { class: String, links: Vec<Link> },
+    Links {
+        /// The set's class name, which says what kind of links they are.
+        class: String,
+        /// `links`.
+        links: Vec<Link>,
+    },
     /// `hclLocalRangeConstraintSet`.
     LocalRange {
+        /// `referenceMeshBufferIdx`: which mesh buffer holds the reference vertices.
         reference_mesh_buffer: u32,
+        /// `stiffness`.
         stiffness: f32,
+        /// `shapeType`, as stored.
         shape_type: u32,
+        /// `applyNormalComponent`.
         apply_normal_component: bool,
+        /// `localConstraints`.
         constraints: Vec<LocalRange>,
     },
     /// Any other class (bend stiffness, volume, transition ...): its name, kept unread.
-    Unread { class: String },
+    Unread {
+        /// The set's class name.
+        class: String,
+    },
 }
 
 /// `hclSimClothData`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimCloth {
+    /// `name`.
     pub name: String,
+    /// `particleDatas`.
     pub particles: Vec<Particle>,
     /// The particles that do not move (`fixedParticles`), as stored.
     pub fixed_particles: Vec<u32>,
+    /// `simClothPoses`.
     pub poses: Vec<Pose>,
+    /// `maxParticleRadius`.
     pub max_particle_radius: f32,
+    /// `totalMass`.
     pub total_mass: f32,
+    /// `staticConstraintSets`.
     pub constraint_sets: Vec<ConstraintSet>,
 }
 
 /// `hclClothData`: the cloth's name and its sim cloths.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cloth {
+    /// `name`.
     pub name: String,
+    /// `simClothDatas`.
     pub sim_cloths: Vec<SimCloth>,
 }
 
@@ -96,29 +130,41 @@ pub struct Cloth {
 /// kind (`hkpRagdollConstraintData`, `hkpLimitedHingeConstraintData` ...).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Constraint {
+    /// `name`.
     pub name: String,
+    /// The class of the object `constraintData` points to, which says what kind of constraint it is.
     pub data_class: String,
+    /// `bodyA`: a body id (`hknpBodyId`'s `serialAndIndex` when the file stores a record).
     pub body_a: u32,
+    /// `bodyB`, as `body_a`.
     pub body_b: u32,
+    /// `flags`, as stored.
     pub flags: u32,
+    /// `desiredConstraintId`.
     pub desired_constraint_id: u32,
+    /// `constraintGroupId`.
     pub constraint_group_id: u32,
 }
 
 /// `hknpRagdollData`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ragdoll {
+    /// `skeleton`.
     pub skeleton: Skeleton,
     /// One a bone: the body that moves it, as stored (negative: none).
     pub bone_to_body: Vec<i32>,
+    /// `bodyTags`, as stored.
     pub body_tags: Vec<u32>,
 }
 
 /// What a file holds of cloth and ragdoll.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Physics {
+    /// Every `hclClothData` of the file, in item order.
     pub cloths: Vec<Cloth>,
+    /// Every `hknpRagdollData`, in item order.
     pub ragdolls: Vec<Ragdoll>,
+    /// Every `hknpConstraintCinfo`, in item order.
     pub constraints: Vec<Constraint>,
 }
 

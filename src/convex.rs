@@ -1,3 +1,6 @@
+//! Convex collision shapes of a tagfile as the vertices, planes and faces of their core (`hknpConvexShape` and the
+//! classes built on it), read by [`ConvexShape::read`].
+
 use crate::{Result, Value, invalid};
 
 /// What a convex shape stores of its core.
@@ -18,14 +21,17 @@ pub enum ConvexKind {
 /// stored: nothing is checked beyond the references between them ([`ConvexShape::read`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConvexShape {
+    /// Which core the shape stores.
     pub kind: ConvexKind,
     /// The shape object's offset in the file, for refusals that name it.
     pub offset: usize,
+    /// `vertices`, each `xyz`.
     pub vertices: Vec<[f32; 3]>,
     /// Empty for [`ConvexKind::Vertices`] and [`ConvexKind::Sphere`].
     pub planes: Vec<[f32; 4]>,
     /// Empty for [`ConvexKind::Vertices`] and [`ConvexKind::Sphere`].
     pub faces: Vec<Vec<usize>>,
+    /// `convexRadius`.
     pub radius: f32,
 }
 
