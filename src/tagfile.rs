@@ -40,7 +40,12 @@ pub struct Tagfile<'a> {
     /// file has no PTCH section.
     pub patches: Vec<(usize, Vec<usize>)>,
     data: &'a [u8],
+    /// The file offset of DATA's first byte.
     data_offset: usize,
+    /// The file offset of the item table (`ITEM`), where an item index is looked up.
+    pub(crate) items_offset: usize,
+    /// The file offset of the type table (`TYPE` or `TCRF`), where a type index is looked up.
+    types_offset: usize,
 }
 
 impl<'a> Tagfile<'a> {
@@ -152,15 +157,17 @@ impl<'a> Tagfile<'a> {
             patches,
             data: data.payload,
             data_offset: data.offset.saturating_add(8),
+            items_offset: table.offset,
+            types_offset: ts.offset,
         };
         for (i, item) in result.items.iter().enumerate().skip(1) {
             if item.type_index == 0 {
                 return Err(invalid(table.offset, format!("null type in item {i}")));
             }
             let stride = result.stride(item.type_index)?;
-            let size = stride
-                .checked_mul(item.count)
-                .ok_or_else(|| invalid(table.offset, "item length overflow"))?;
+            let size = result
+                .extent(stride, item.count)
+                .map_err(|e| invalid(table.offset, format!("item {i}: {}", e.detail)))?;
             result.bytes(item.offset, size)?;
         }
         Ok(result)
@@ -171,22 +178,28 @@ impl<'a> Tagfile<'a> {
             if index == 0 {
                 return Ok(T::default());
             }
-            let t = self
-                .types
-                .get(index)
-                .ok_or_else(|| invalid(0, "type index out of bounds"))?;
+            let t = self.types.get(index).ok_or_else(|| {
+                invalid(
+                    self.types_offset,
+                    format!(
+                        "type index {index} out of bounds: the file has {} types",
+                        self.types.len()
+                    ),
+                )
+            })?;
             if let Some(value) = f(t) {
                 return Ok(value);
             }
             index = t.parent;
         }
-        Err(invalid(0, "cyclic inherited property"))
+        Err(invalid(self.types_offset, "cyclic inherited property"))
     }
     /// The `format` word of a type or the nearest type it derives from (low four bits: the kind, e.g. 7 class, 6
     /// pointer, 8 array, 3 string; the rest per kind).
     pub fn format(&self, index: usize) -> Result<usize> {
         let format: u64 = self.inherited(index, |t| t.format)?;
-        usize::try_from(format).map_err(|_| invalid(0, "type format exceeds the address space"))
+        usize::try_from(format)
+            .map_err(|_| invalid(self.types_offset, "type format exceeds the address space"))
     }
     /// The stored size in bytes of one element of the type (its own or the nearest parent's).
     pub fn stride(&self, index: usize) -> Result<usize> {
@@ -196,19 +209,49 @@ impl<'a> Tagfile<'a> {
         // HKLib's PointerFormatHandler and IndexItem read UInt64 per element (2018.1).
         self.inherited(index, |t| t.size)
     }
+    /// The file offset of the byte at `offset` in DATA, for errors: [`Value::offset`](crate::Value) and the item
+    /// offsets are DATA's, a refusal names the file's.
+    pub(crate) fn at(&self, offset: usize) -> usize {
+        self.data_offset.saturating_add(offset)
+    }
+    /// The bytes `count` elements of `stride` bytes take. Elements of no size take none however many there are, so
+    /// the extent bounds nothing that is sized from the count; more than one such element is refused.
+    pub(crate) fn extent(&self, stride: usize, count: usize) -> Result<usize> {
+        if stride == 0 && count > 1 {
+            return Err(invalid(
+                self.data_offset,
+                format!("{count} zero-size elements: an array of elements with no size is not stored"),
+            ));
+        }
+        stride.checked_mul(count).ok_or_else(|| {
+            invalid(
+                self.data_offset,
+                format!("{count} elements of {stride} bytes overflow"),
+            )
+        })
+    }
     /// `size` bytes of DATA at `offset`; an error naming the offset when they run past it.
     pub fn bytes(&self, offset: usize, size: usize) -> Result<&'a [u8]> {
-        let end = offset
-            .checked_add(size)
-            .ok_or_else(|| invalid(self.data_offset.saturating_add(offset), "DATA range overflow"))?;
-        self.data
-            .get(offset..end)
-            .ok_or_else(|| invalid(self.data_offset.saturating_add(offset), "object exceeds DATA"))
+        let end = offset.checked_add(size).ok_or_else(|| {
+            invalid(
+                self.at(offset),
+                format!("{size} bytes at {offset:#x} of DATA overflow"),
+            )
+        })?;
+        self.data.get(offset..end).ok_or_else(|| {
+            invalid(
+                self.at(offset),
+                format!(
+                    "{size} bytes at {offset:#x} run past the end of DATA ({:#x} bytes)",
+                    self.data.len()
+                ),
+            )
+        })
     }
     /// The `N` bytes at `offset` in DATA.
     pub(crate) fn array<const N: usize>(&self, offset: usize) -> Result<[u8; N]> {
         self.bytes(offset, N)?
             .try_into()
-            .map_err(|_| invalid(self.data_offset.saturating_add(offset), "object exceeds DATA"))
+            .map_err(|_| invalid(self.at(offset), format!("expected {N} bytes of DATA")))
     }
 }

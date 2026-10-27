@@ -152,3 +152,84 @@ fn a_string_index_at_the_end_of_the_table_is_an_error() {
     let error = Tagfile::read(&bytes, None).unwrap_err().to_string();
     assert!(error.contains("string index out of bounds"), "{error}");
 }
+
+/// The file offset of the first section called `name`: its header, four bytes before the signature.
+fn section_offset(bytes: &[u8], name: &[u8; 4]) -> usize {
+    bytes.windows(4).position(|w| w == name).expect("section") - 4
+}
+
+/// An item index the table lacks is refused at the item table, saying which index and how many items there are.
+#[test]
+fn an_item_index_outside_the_table_names_the_table() {
+    let bytes = fixture();
+    let tag = Tagfile::read(&bytes, None).expect("fixture");
+    let error = tag.item(99).unwrap_err();
+    assert_eq!(error.offset, section_offset(&bytes, b"ITEM"));
+    assert!(error.detail.contains("99"), "{error}");
+    assert!(error.detail.contains("4 items"), "{error}");
+}
+
+/// A dangling reference is reported where the reference is stored: a file offset, not an offset in DATA.
+#[test]
+fn a_dangling_reference_names_the_stored_reference_in_the_file() {
+    let mut bytes = fixture();
+    let data = section_offset(&bytes, b"DATA");
+    bytes[data + 8 + 8..data + 8 + 12].copy_from_slice(&99u32.to_le_bytes());
+    let tag = Tagfile::read(&bytes, None).expect("container");
+    let error = tag
+        .root()
+        .unwrap()
+        .field("pointer")
+        .unwrap()
+        .dereference()
+        .unwrap_err();
+    assert_eq!(error.offset, data + 8 + 8);
+    assert!(error.detail.contains("99"), "{error}");
+}
+
+/// Errors of the typed views carry file offsets (DATA starts eight bytes after its section header), and say what was
+/// asked for.
+#[test]
+fn value_errors_carry_file_offsets() {
+    let bytes = fixture();
+    let data = section_offset(&bytes, b"DATA") + 8;
+    let tag = Tagfile::read(&bytes, None).expect("fixture");
+    let root = tag.root().unwrap();
+    let missing = root.field("absent").unwrap_err();
+    assert_eq!(missing.offset, data);
+    let array = root.field("array").unwrap().array().unwrap();
+    let past = array.get(2).unwrap_err();
+    // where element 2 would be: the item is at 40, its elements eight bytes each
+    assert_eq!(past.offset, data + 40 + 16);
+    assert!(
+        past.detail.contains("index 2") && past.detail.contains("2 elements"),
+        "{past}"
+    );
+    let not_a_class = root.field("value").unwrap().field("x").unwrap_err();
+    assert_eq!(not_a_class.offset, data);
+    assert!(not_a_class.detail.contains("class"), "{not_a_class}");
+}
+
+/// Elements of no size take no bytes however many there are: a count of 2^32 of them passes the extent check, and
+/// readers then size their output from it. They are refused instead.
+#[test]
+fn repeated_zero_size_elements_are_refused() {
+    let zero_size = |count: u32| {
+        let mut bytes = fixture();
+        // `uint`: its size and alignment bytes
+        let body = [2u8, 0, 9, 0xc0, 0x80, 4, 4, 4];
+        let at = bytes
+            .windows(body.len())
+            .position(|w| w == body)
+            .expect("uint body");
+        bytes[at + 6] = 0;
+        // item 2 (type 2, offset 32): its count
+        let item = [0x02u8, 0, 0, 0x10, 32, 0, 0, 0];
+        let at = bytes.windows(item.len()).position(|w| w == item).expect("item 2") + 8;
+        bytes[at..at + 4].copy_from_slice(&count.to_le_bytes());
+        bytes
+    };
+    assert!(Tagfile::read(&zero_size(1), None).is_ok());
+    let error = Tagfile::read(&zero_size(u32::MAX), None).unwrap_err();
+    assert!(error.detail.contains("zero-size"), "{error}");
+}

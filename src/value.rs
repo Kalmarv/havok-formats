@@ -26,18 +26,29 @@ pub struct Array<'t, 'a> {
     stride: usize,
 }
 impl<'a> Tagfile<'a> {
-    /// The elements of item `index` of the item table.
+    /// The elements of item `index` of the item table. An index the table lacks is refused at the table.
     pub fn item(&self, index: usize) -> Result<Array<'_, 'a>> {
-        let item = self
-            .items
-            .get(index)
-            .ok_or_else(|| invalid(index, "item index out of bounds"))?;
+        self.item_referenced(index, self.items_offset)
+    }
+    /// Like [`item`](Self::item) for an index stored at file offset `at`, which is where a refusal is reported.
+    fn item_referenced(&self, index: usize, at: usize) -> Result<Array<'_, 'a>> {
+        let item = self.items.get(index).ok_or_else(|| {
+            invalid(
+                at,
+                format!(
+                    "item index {index} out of bounds: the file has {} items",
+                    self.items.len()
+                ),
+            )
+        })?;
+        let stride = self.stride(item.type_index)?;
+        self.extent(stride, item.count)?;
         Ok(Array {
             tag: self,
             type_index: item.type_index,
             offset: item.offset,
             count: item.count,
-            stride: self.stride(item.type_index)?,
+            stride,
         })
     }
     /// The root object (the first element of item 1).
@@ -57,19 +68,31 @@ impl<'t, 'a> Array<'t, 'a> {
     /// The bytes of an array of bytes, as stored.
     pub fn raw(self) -> Result<&'a [u8]> {
         if self.stride != 1 {
-            return Err(invalid(self.offset, "expected an array of bytes"));
+            return Err(invalid(
+                self.tag.at(self.offset),
+                format!(
+                    "expected an array of bytes, not elements of {} bytes",
+                    self.stride
+                ),
+            ));
         }
         self.tag.bytes(self.offset, self.count)
     }
     /// Element `index`; an error when it is out of bounds or runs past DATA.
     pub fn get(self, index: usize) -> Result<Value<'t, 'a>> {
-        if index >= self.count {
-            return Err(invalid(self.offset, "array index out of bounds"));
-        }
         let offset = index
             .checked_mul(self.stride)
             .and_then(|n| self.offset.checked_add(n))
-            .ok_or_else(|| invalid(self.offset, "array offset overflow"))?;
+            .ok_or_else(|| invalid(self.tag.at(self.offset), "array element offset overflows"))?;
+        if index >= self.count {
+            return Err(invalid(
+                self.tag.at(offset),
+                format!(
+                    "array index {index} out of bounds: the array has {} elements",
+                    self.count
+                ),
+            ));
+        }
         self.tag.bytes(offset, self.stride)?;
         Ok(Value {
             tag: self.tag,
@@ -79,6 +102,10 @@ impl<'t, 'a> Array<'t, 'a> {
     }
 }
 impl<'t, 'a> Value<'t, 'a> {
+    /// The file offset of the value, for refusals.
+    fn at(self) -> usize {
+        self.tag.at(self.offset)
+    }
     /// The name of the value's type (a value's type index is one the tagfile checked: its items', fields' and
     /// array elements').
     pub fn type_name(self) -> &'t str {
@@ -106,7 +133,10 @@ impl<'t, 'a> Value<'t, 'a> {
     /// a class, has no such member, or the member does not fit the class's layout.
     pub fn field(self, name: &str) -> Result<Self> {
         if self.format()? & 15 != 7 {
-            return Err(invalid(self.offset, "field access requires a class"));
+            return Err(invalid(
+                self.at(),
+                format!("field {name} needs a class value, not a {}", self.type_name()),
+            ));
         }
         let mut index = self.type_index;
         while let Some(t) = self.tag.types.get(index).filter(|_| index != 0) {
@@ -114,11 +144,17 @@ impl<'t, 'a> Value<'t, 'a> {
                 let offset = self
                     .offset
                     .checked_add(f.offset)
-                    .ok_or_else(|| invalid(self.offset, "field offset overflow"))?;
+                    .ok_or_else(|| invalid(self.at(), "field offset overflow"))?;
                 let size = self.tag.inherited(f.type_index, |t| t.size)?;
                 let parent_size = self.tag.inherited(self.type_index, |t| t.size)?;
                 if f.offset.checked_add(size).is_none_or(|n| n > parent_size) {
-                    return Err(invalid(offset, "field exceeds class layout"));
+                    return Err(invalid(
+                        self.tag.at(offset),
+                        format!(
+                            "field {name} of {size} bytes at {:#x} exceeds the class size {parent_size}",
+                            f.offset
+                        ),
+                    ));
                 }
                 self.tag.bytes(offset, size)?;
                 return Ok(Self {
@@ -130,7 +166,7 @@ impl<'t, 'a> Value<'t, 'a> {
             index = t.parent;
         }
         Err(invalid(
-            self.offset,
+            self.at(),
             format!("{} has no field {name}", self.type_name()),
         ))
     }
@@ -140,59 +176,69 @@ impl<'t, 'a> Value<'t, 'a> {
     /// The object a pointer value refers to; `None` for a null pointer.
     pub fn pointer(self) -> Result<Option<Self>> {
         if self.format()? & 15 != 6 {
-            return Err(invalid(self.offset, "expected pointer"));
+            return Err(invalid(
+                self.at(),
+                format!("expected a pointer, not a {}", self.type_name()),
+            ));
         }
         let index = self.reference_index()?;
         if index == 0 {
             Ok(None)
         } else {
-            self.tag.item(index)?.get(0).map(Some)
+            self.tag.item_referenced(index, self.at())?.get(0).map(Some)
         }
     }
     /// Like [`pointer`](Self::pointer), but a null pointer is an error.
     pub fn dereference(self) -> Result<Self> {
         self.pointer()?
-            .ok_or_else(|| invalid(self.offset, "null pointer"))
+            .ok_or_else(|| invalid(self.at(), "expected a pointer to an object, found a null pointer"))
     }
     /// A tagfile string reference, bounded by its character ITEM.
     pub fn string(self) -> Result<String> {
         if self.format()? & 15 != 3 {
-            return Err(invalid(self.offset, "expected string"));
+            return Err(invalid(
+                self.at(),
+                format!("expected a string, not a {}", self.type_name()),
+            ));
         }
         let index = self.reference_index()?;
         if index == 0 {
             return Ok(String::new());
         }
-        let item = self.tag.item(index)?;
+        let item = self.tag.item_referenced(index, self.at())?;
         let mut bytes = Vec::new();
         for i in 0..item.len() {
             let byte = u8::try_from(item.get(i)?.unsigned()?)
-                .map_err(|_| invalid(self.offset, "string character exceeds byte"))?;
+                .map_err(|_| invalid(self.at(), "expected a string of bytes: a character exceeds 255"))?;
             if byte == 0 {
-                return String::from_utf8(bytes).map_err(|_| invalid(self.offset, "invalid UTF-8 string"));
+                return String::from_utf8(bytes).map_err(|_| invalid(self.at(), "expected a UTF-8 string"));
             }
             bytes.push(byte);
         }
-        Err(invalid(self.offset, "unterminated string"))
+        Err(invalid(self.at(), "expected a string ending in a zero byte"))
     }
     /// The elements of an array value (a stored array or a fixed-size one).
     pub fn array(self) -> Result<Array<'t, 'a>> {
         let format = self.format()?;
         if format & 15 != 8 {
-            return Err(invalid(self.offset, "expected array"));
+            return Err(invalid(
+                self.at(),
+                format!("expected an array, not a {}", self.type_name()),
+            ));
         }
         if format & 32 == 0 {
-            return self.tag.item(self.reference_index()?);
+            return self.tag.item_referenced(self.reference_index()?, self.at());
         }
         let type_index = self.tag.inherited(self.type_index, |t| t.subtype)?;
         if type_index == 0 {
-            return Err(invalid(self.offset, "array has no element type"));
+            return Err(invalid(self.at(), "expected an array with an element type"));
         }
         let count = format >> 8;
         let stride = self.tag.inherited(type_index, |t| t.size)?;
-        let size = count
-            .checked_mul(stride)
-            .ok_or_else(|| invalid(self.offset, "array size overflow"))?;
+        let size = self
+            .tag
+            .extent(stride, count)
+            .map_err(|e| invalid(self.at(), e.detail))?;
         self.tag.bytes(self.offset, size)?;
         Ok(Array {
             tag: self.tag,
@@ -206,11 +252,17 @@ impl<'t, 'a> Value<'t, 'a> {
     pub fn unsigned(self) -> Result<u64> {
         let format = self.format()?;
         if ![2, 4].contains(&(format & 15)) {
-            return Err(invalid(self.offset, "expected integer"));
+            return Err(invalid(
+                self.at(),
+                format!("expected an integer, not a {}", self.type_name()),
+            ));
         }
         let bits = format >> 10;
         if ![8, 16, 32, 64].contains(&bits) {
-            return Err(invalid(self.offset, "unsupported integer width"));
+            return Err(invalid(
+                self.at(),
+                format!("expected an integer of 8, 16, 32 or 64 bits, not {bits}"),
+            ));
         }
         let bytes = self.tag.bytes(self.offset, bits / 8)?;
         Ok(bytes.iter().rev().fold(0u64, |n, &b| (n << 8) | u64::from(b)))
@@ -221,7 +273,7 @@ impl<'t, 'a> Value<'t, 'a> {
         let bits = format >> 10;
         let value = self.unsigned()?;
         if format & 512 == 0 {
-            return i64::try_from(value).map_err(|_| invalid(self.offset, "unsigned value exceeds i64"));
+            return i64::try_from(value).map_err(|_| invalid(self.at(), "expected a value that fits i64"));
         }
         // sign-extended from its width: 8, 16, 32 or 64 bits, the widths `unsigned` reads
         let shift = match bits {
@@ -236,7 +288,10 @@ impl<'t, 'a> Value<'t, 'a> {
     /// Geometry consumers must validate the components they actually use.
     pub fn float(self) -> Result<f32> {
         if self.format()? != 0x174605 {
-            return Err(invalid(self.offset, "expected float32"));
+            return Err(invalid(
+                self.at(),
+                format!("expected a float32, not a {}", self.type_name()),
+            ));
         }
         let value = f32::from_le_bytes(self.tag.array(self.offset)?);
         Ok(value)
@@ -245,7 +300,10 @@ impl<'t, 'a> Value<'t, 'a> {
     pub fn vector<const N: usize>(self) -> Result<[f32; N]> {
         let a = self.array()?;
         if a.len() != N {
-            return Err(invalid(self.offset, "vector length mismatch"));
+            return Err(invalid(
+                self.at(),
+                format!("expected a vector of {N} floats, found {}", a.len()),
+            ));
         }
         let mut result = [0.; N];
         for (i, x) in result.iter_mut().enumerate() {
