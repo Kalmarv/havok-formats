@@ -1,5 +1,6 @@
-//! Container coverage gate. The independent decoder supplies loose tagfiles
-//! and their compendium; no game data is included in the repository.
+//! Real-data check of the tagfile container and compressed mesh readers: reads every loose tagfile (`.hkx`) and
+//! compendium of one Sekiro area's map collision, extracted from the user's own install (see tests/inputs/README.md);
+//! skips without it. No game data is included in the repository.
 mod inputs;
 
 use havok_formats::{Compendium, Tagfile};

@@ -9,13 +9,18 @@ use crate::{Result, invalid};
 /// have flags zero; their payload consists entirely of child sections.
 #[derive(Debug, Clone, Copy)]
 pub struct Section<'a> {
+    /// Offset of the section's header in the file.
     pub offset: usize,
+    /// The four-character signature (`TAG0`, `DATA`, `TYPE`, ...).
     pub signature: [u8; 4],
+    /// The two flag bits of the length word.
     pub flags: u8,
+    /// The bytes after the 8-byte header.
     pub payload: &'a [u8],
 }
 
 impl<'a> Section<'a> {
+    /// The sections a container section holds; an error for a leaf.
     pub fn children(self) -> Result<Vec<Self>> {
         if self.flags != 0 {
             return Err(invalid(self.offset, "leaf section has no children"));

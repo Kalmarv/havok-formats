@@ -5,35 +5,60 @@
 )]
 use crate::{Error, Result, Section, invalid, sections};
 
+/// A type from a tagfile's (or compendium's) type table.
+///
+/// Optional properties are `None` when the type does not store them; [`Tagfile::inherited`](crate::Tagfile::inherited)
+/// looks one up through the parents.
 #[derive(Debug, Clone, Default)]
 pub struct Type {
+    /// The class or type name, template arguments not included (see `parameters`).
     pub name: String,
+    /// Index of the parent type; 0 for none.
     pub parent: usize,
+    /// Which optional properties follow in the file (bit set, below 128).
     pub flags: u64,
+    /// The format word: the kind in the low four bits (7 class, 6 pointer, 8 array, 3 string, 2 and 4 integers) and
+    /// kind-specific bits above.
     pub format: Option<u64>,
+    /// The element type of an array or pointer, or the type a template wraps.
     pub subtype: Option<usize>,
+    /// The class version.
     pub version: Option<u64>,
+    /// Size in bytes.
     pub size: Option<usize>,
+    /// Alignment in bytes.
     pub alignment: Option<usize>,
+    /// The stored abstract value.
     pub abstract_value: Option<u64>,
+    /// Template parameters: a name and a value (a type index when the name starts with `t`).
     pub parameters: Vec<(String, u64)>,
+    /// The members the class declares itself (inherited ones are on its parents).
     pub fields: Vec<Field>,
     /// Reflection properties the type declares beside its fields: counted, their records are not serialized.
     pub properties: usize,
+    /// Implemented interfaces: a type index and the stored flags.
     pub interfaces: Vec<(usize, u64)>,
+    /// The type's hash, from the THSH section when the file has one.
     pub hash: Option<u32>,
 }
 
+/// A member of a class.
 #[derive(Debug, Clone)]
 pub struct Field {
+    /// The member's name.
     pub name: String,
+    /// The member's stored flags.
     pub flags: u64,
+    /// Byte offset within the object.
     pub offset: usize,
+    /// The member's type.
     pub type_index: usize,
 }
 
+/// A `TCM0` type compendium: the type table shared by several tagfiles, which name it by an id.
 #[derive(Debug, Clone)]
 pub struct Compendium {
+    /// The ids of the type tables the compendium holds.
     pub ids: Vec<[u8; 8]>,
     /// Index zero is a null placeholder.
     pub types: Vec<Type>,
@@ -142,6 +167,7 @@ fn string(table: &[String], c: &mut Cursor<'_>) -> Result<String> {
 }
 
 impl Compendium {
+    /// Parse and check a `TCM0` file.
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let roots = sections(bytes)?;
         let &[root] = roots.as_slice() else {

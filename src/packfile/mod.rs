@@ -1,8 +1,8 @@
 //! Bounds-checked view of Havok binary *packfiles* (the pre-tagfile `0x57E0E057 0x10C0C010` container), version 7
-//! with the 7.1.0-r1 contents version, 4-byte pointers, big endian: the layout the PS3 titles of that SDK ship.
+//! with the 7.1.0-r1 contents version, 4-byte pointers, big endian: the layout Tony Hawk's SHRED (PS3) ships.
 //! Only that layout is read; any other version or layout rules are refused by name.
 //!
-//! Layout (offsets from the file start; every field checked on 490 real files):
+//! Layout (offsets from the file start; every field held on 490 Tony Hawk's SHRED (PS3) files):
 //!
 //! | offset | field | check |
 //! |---|---|---|
@@ -45,13 +45,21 @@ const END_OF_FIXUPS: u32 = 0xFFFF_FFFF;
 /// A section header; every offset but `start` is relative to `start`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
+    /// The section's name (`__classnames__`, `__types__`, `__data__`).
     pub tag: String,
+    /// Offset of the section's bytes in the file.
     pub start: usize,
+    /// Offset of the local fixups.
     pub local: usize,
+    /// Offset of the global fixups.
     pub global: usize,
+    /// Offset of the virtual fixups.
     pub virtual_fixups: usize,
+    /// Offset of the exports.
     pub exports: usize,
+    /// Offset of the imports.
     pub imports: usize,
+    /// Offset of the end of the section.
     pub end: usize,
 }
 
@@ -68,14 +76,21 @@ pub struct Object {
 /// A hkArray header: element pointer (None when null) and element count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Array {
+    /// Data-section offset of the elements; `None` when null.
     pub data: Option<usize>,
+    /// The element count.
     pub len: usize,
 }
 
+/// A parsed packfile: the section table, the class names, the fixups and the objects, over the borrowed file bytes.
+///
+/// Offsets taken and returned by its accessors are offsets in the `__data__` section; errors report file offsets.
 #[derive(Debug)]
 pub struct Packfile<'a> {
     bytes: &'a [u8],
+    /// The section headers, in file order.
     pub sections: Vec<Section>,
+    /// The two `0xFFFFFFFF` words at `0x38` and `0x3C`, as stored.
     pub flags: [u32; 2],
     classes: Vec<(usize, String)>,
     data_start: usize,
@@ -213,7 +228,7 @@ impl<'a> Packfile<'a> {
         let class_section = section_named("__classnames__")?;
         let data_section = section_named("__data__")?;
         section_named("__types__")?;
-        // the level files' __types__ is empty; the ragdoll files carry reflection data, which is not read
+        // the level files' __types__ is empty; files with reflection data in it are accepted, and it is not read
         if usize_at(0x18, "the contents section")? != data_section {
             return Err(invalid(0x18, "the root object is not in the data section"));
         }
@@ -433,6 +448,7 @@ impl<'a> Packfile<'a> {
         self.root
     }
 
+    /// The class name of `object`.
     pub fn class_name(&self, object: &Object) -> &str {
         self.classes.get(object.class).map_or("", |(_, n)| n.as_str())
     }
@@ -489,15 +505,18 @@ impl<'a> Packfile<'a> {
             .ok_or_else(|| self.err(offset, "the data section runs past the file"))
     }
 
+    /// The byte at `offset` in the data section.
     pub fn u8(&self, offset: usize) -> Result<u8> {
         self.bytes(offset, 1)?
             .first()
             .copied()
             .ok_or_else(|| self.err(offset, "empty read"))
     }
+    /// The big-endian `u16` at `offset` in the data section.
     pub fn u16(&self, offset: usize) -> Result<u16> {
         Ok(u16::from_be_bytes(self.array(offset)?))
     }
+    /// The big-endian `u32` at `offset` in the data section.
     pub fn u32(&self, offset: usize) -> Result<u32> {
         Ok(u32::from_be_bytes(self.array(offset)?))
     }

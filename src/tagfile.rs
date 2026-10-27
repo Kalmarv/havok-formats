@@ -10,25 +10,43 @@ use crate::{Compendium, Result, Type, invalid, sections};
 /// same item and patch tables; class layouts come from each file's own type metadata.
 pub const SDK_VERSIONS: [[u8; 8]; 2] = [*b"20160200", *b"20180100"];
 
+/// One entry of the tagfile's item table: `count` consecutive elements of one type at `offset` in DATA. Item 0 is
+/// the null item; item 1 holds the root object.
 #[derive(Debug, Clone, Copy)]
 pub struct Item {
+    /// Index into [`Tagfile::types`] (one-based; never 0 for an item after the null item).
     pub type_index: usize,
+    /// The flags byte stored beside the type index, as stored.
     pub flags: u8,
+    /// Byte offset of the first element in DATA.
     pub offset: usize,
+    /// Number of elements.
     pub count: usize,
 }
 
+/// A parsed `TAG0` tagfile: its types, its item table and a borrow of its DATA section.
+///
+/// Objects are read lazily through [`Tagfile::root`], [`Tagfile::item`] and the [`crate::Value`] and [`crate::Array`] views they
+/// return; nothing is decoded until asked for.
 #[derive(Debug)]
 pub struct Tagfile<'a> {
+    /// The SDK version string as stored, e.g. `20160200`; one of [`SDK_VERSIONS`].
     pub version: [u8; 8],
+    /// The type table. Index 0 is the null type; the file's own, or the compendium's.
     pub types: Vec<Type>,
+    /// The item table, from the null item at index 0.
     pub items: Vec<Item>,
+    /// The PTCH section: per type index, the DATA offsets of the stored item references of that type. Empty when the
+    /// file has no PTCH section.
     pub patches: Vec<(usize, Vec<usize>)>,
     data: &'a [u8],
     data_offset: usize,
 }
 
 impl<'a> Tagfile<'a> {
+    /// Parse and check the file's sections, types, item table and patch table. A file whose types are stored in an
+    /// external compendium (`TCRF`) needs `compendium`; one that carries its own (`TYPE`) ignores it. Item extents
+    /// and patch references are checked against DATA, so later reads cannot leave it.
     pub fn read(bytes: &'a [u8], compendium: Option<&Compendium>) -> Result<Self> {
         let roots = sections(bytes)?;
         let &[root] = roots.as_slice() else {
@@ -164,10 +182,13 @@ impl<'a> Tagfile<'a> {
         }
         Err(invalid(0, "cyclic inherited property"))
     }
+    /// The `format` word of a type or the nearest type it derives from (low four bits: the kind, e.g. 7 class, 6
+    /// pointer, 8 array, 3 string; the rest per kind).
     pub fn format(&self, index: usize) -> Result<usize> {
         let format: u64 = self.inherited(index, |t| t.format)?;
         usize::try_from(format).map_err(|_| invalid(0, "type format exceeds the address space"))
     }
+    /// The stored size in bytes of one element of the type (its own or the nearest parent's).
     pub fn stride(&self, index: usize) -> Result<usize> {
         // DATA retains the reflected element width, including references: an eight-byte
         // pointer stores its ITEM index in the low word and a zero high word. Advancing
@@ -175,6 +196,7 @@ impl<'a> Tagfile<'a> {
         // HKLib's PointerFormatHandler and IndexItem read UInt64 per element (2018.1).
         self.inherited(index, |t| t.size)
     }
+    /// `size` bytes of DATA at `offset`; an error naming the offset when they run past it.
     pub fn bytes(&self, offset: usize, size: usize) -> Result<&'a [u8]> {
         let end = offset
             .checked_add(size)

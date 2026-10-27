@@ -1,6 +1,10 @@
 [package]
 name = "havok-formats"
-description = "Checked readers of Havok TAG0/TCM0 tagfiles and 7.1.0 packfiles: compressed meshes, cloth, spline animation"
+description = "Bounds-checked readers of Havok tagfiles, packfiles, compressed collision meshes, cloth and spline animation, as game files store them"
+keywords = ["havok", "gamedev", "modding", "parser", "collision"]
+categories = ["parser-implementations", "game-development"]
+readme = "README.md"
+documentation = "https://docs.rs/havok-formats"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

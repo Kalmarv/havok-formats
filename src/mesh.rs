@@ -1,28 +1,34 @@
 use crate::{Result, Value, invalid};
 
+/// One triangle of a compressed mesh.
 #[derive(Debug, Clone, Copy)]
 pub struct Triangle {
     /// Right-aligned shape key: section, primitive, and quad half.
     pub key: u32,
-    /// Shape-local coordinates, retaining the source coordinate frame.
+    /// Shape-local coordinates, in the coordinate frame the file stores.
     pub vertices: [[f32; 3]; 3],
 }
+/// The triangles of a compressed mesh tree, and the primitives that are not triangles.
 #[derive(Debug, Default)]
 pub struct CompressedMesh {
+    /// Every triangle; a quad is two.
     pub triangles: Vec<Triangle>,
+    /// How many primitives are the `DEAD` sentinel (`[0xde, 0xad, 0xde, 0xad]`), which hold nothing.
     pub dead_primitives: usize,
     /// Primitives that are not triangles or quads, in key order.
     pub custom: Vec<CustomPrimitive>,
 }
 
 /// A custom primitive of a mesh tree: one whose second and fourth indices are equal (`[k, x, n, x]`; no triangle or
-/// quad of either game's collision has them equal). Instead of vertices, `k` names where its data starts in the
+/// quad in the Sekiro or Elden Ring collision read has them equal). Instead of vertices, `k` names where its data starts in the
 /// shared-vertex index (counting the section's packed vertices first, as a vertex index does).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomPrimitive {
     /// Right-aligned shape key: section and primitive, quad half zero.
     pub key: u32,
+    /// The primitive's four stored indices.
     pub indices: [usize; 4],
+    /// What the data is.
     pub kind: CustomKind,
 }
 
@@ -30,10 +36,10 @@ pub struct CustomPrimitive {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomKind {
     /// `[146, w, index low, index high]` with indices `[k, k, 4, k]`: the extern shape at `index` of the shape's
-    /// `externShapes` (the second word is not read). The source's asset collision.
+    /// `externShapes` (the second word is not read). Elden Ring's asset collision.
     Extern(usize),
     /// Records whose first word's low byte is 0x52 (`[0x2252, 8, 0x3d4d]`: a word, what may be a vertex index and what
-    /// may be a half float; both sources'): their meaning is not known, so they are not read.
+    /// may be a half float; in both games'): their meaning is not known, so they are not read.
     Unread,
 }
 
@@ -42,7 +48,9 @@ pub enum CustomKind {
 /// instance is refused.
 #[derive(Debug, Clone, Copy)]
 pub struct ShapeInstance<'t, 'a> {
+    /// Four columns of three floats: rotation x, y and z, then translation.
     pub transform: [[f32; 3]; 4],
+    /// The placed shape.
     pub shape: Value<'t, 'a>,
 }
 

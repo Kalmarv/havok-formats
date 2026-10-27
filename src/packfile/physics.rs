@@ -115,28 +115,38 @@ pub fn rigid_bodies(pack: &Packfile<'_>) -> Vec<usize> {
 
 /// Motion types seen in the data (Havok's `hkpMotion::MotionType`: 2 sphere inertia, 3 box inertia, 5 fixed).
 pub const MOTION_SPHERE_INERTIA: u8 = 2;
+/// Motion type 3: box inertia.
 pub const MOTION_BOX_INERTIA: u8 = 3;
+/// Motion type 5: fixed.
 pub const MOTION_FIXED: u8 = 5;
 
+/// An `hkpRigidBody`: where it is, what it is named and the shape it carries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RigidBody {
+    /// The body's data-section offset.
     pub offset: usize,
     /// The collision shape's object offset.
     pub shape: usize,
+    /// The body's name.
     pub name: String,
     /// `hkpMaterial` response type (1 = simple contact).
     pub response_type: u8,
+    /// Material friction.
     pub friction: f32,
+    /// Material restitution.
     pub restitution: f32,
     /// High 16 bits: group; low 16 bits are `0xFFFF` in the data.
     pub collision_filter_info: u32,
+    /// `hkpMotion::MotionType`; 2, 3 or 5 are accepted.
     pub motion_type: u8,
     /// Rotation as three columns: `world = x*c0 + y*c1 + z*c2 + translation`.
     pub rotation: [[f32; 3]; 3],
+    /// The body's position.
     pub translation: [f32; 3],
 }
 
 impl RigidBody {
+    /// The rigid body at data-section `offset`; every member is checked as the table above states.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
         let at = |add| pack.at(offset, add);
         if pack.class_at(offset)? != "hkpRigidBody" {
@@ -216,6 +226,7 @@ pub struct MeshMaterial {
     pub c: u32,
 }
 
+/// One subpart of an extended mesh: its vertices, triangles and materials.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Subpart {
     /// Shape-local vertices (the stored w lane is dropped).
@@ -229,16 +240,21 @@ pub struct Subpart {
     pub triangle_offset: usize,
 }
 
+/// An `hkpStorageExtendedMeshShape`: a triangle mesh stored in subparts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtendedMesh {
+    /// Half extents of the stored bounding box.
     pub aabb_half_extents: [f32; 3],
+    /// Centre of the stored bounding box.
     pub aabb_center: [f32; 3],
+    /// The subparts, in order.
     pub subparts: Vec<Subpart>,
     /// Per triangle (all subparts in order), the 16-bit welding info.
     pub welding: Vec<u16>,
 }
 
 impl ExtendedMesh {
+    /// The extended mesh at data-section `offset`; refused when a member differs from the confirmed layout.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
         let at = |add| pack.at(offset, add);
         if pack.class_at(offset)? != "hkpStorageExtendedMeshShape" {
@@ -286,6 +302,7 @@ impl ExtendedMesh {
         })
     }
 
+    /// The triangles of all subparts.
     pub fn triangle_count(&self) -> usize {
         self.subparts.iter().map(|s| s.triangles.len()).sum()
     }
@@ -390,17 +407,23 @@ fn read_subpart(pack: &Packfile<'_>, sub: usize, store: usize, expected_offset: 
     })
 }
 
+/// An `hkpConvexVerticesShape`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConvexVertices {
+    /// The convex radius.
     pub radius: f32,
+    /// Half extents of the stored bounding box.
     pub aabb_half_extents: [f32; 3],
+    /// Centre of the stored bounding box.
     pub aabb_center: [f32; 3],
+    /// The vertices, unpacked from the `FourVectors` groups.
     pub vertices: Vec<[f32; 3]>,
     /// Stored plane equations `(nx, ny, nz, d)`: approximate, not exact hull faces.
     pub planes: Vec<[f32; 4]>,
 }
 
 impl ConvexVertices {
+    /// The convex vertices shape at data-section `offset`.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
         let at = |add| pack.at(offset, add);
         if pack.class_at(offset)? != "hkpConvexVerticesShape" {

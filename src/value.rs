@@ -10,9 +10,13 @@ use crate::{Result, Tagfile, invalid};
 #[derive(Debug, Clone, Copy)]
 pub struct Value<'t, 'a> {
     pub(crate) tag: &'t Tagfile<'a>,
+    /// The value's type in [`Tagfile::types`].
     pub type_index: usize,
+    /// The value's byte offset in DATA.
     pub offset: usize,
 }
+
+/// A run of values of one type: an item of the tagfile, an array member, or a fixed-size array.
 #[derive(Debug, Clone, Copy)]
 pub struct Array<'t, 'a> {
     tag: &'t Tagfile<'a>,
@@ -22,6 +26,7 @@ pub struct Array<'t, 'a> {
     stride: usize,
 }
 impl<'a> Tagfile<'a> {
+    /// The elements of item `index` of the item table.
     pub fn item(&self, index: usize) -> Result<Array<'_, 'a>> {
         let item = self
             .items
@@ -35,14 +40,17 @@ impl<'a> Tagfile<'a> {
             stride: self.stride(item.type_index)?,
         })
     }
+    /// The root object (the first element of item 1).
     pub fn root(&self) -> Result<Value<'_, 'a>> {
         self.item(1)?.get(0)
     }
 }
 impl<'t, 'a> Array<'t, 'a> {
+    /// The number of elements.
     pub fn len(self) -> usize {
         self.count
     }
+    /// Whether there are no elements.
     pub fn is_empty(self) -> bool {
         self.count == 0
     }
@@ -53,6 +61,7 @@ impl<'t, 'a> Array<'t, 'a> {
         }
         self.tag.bytes(self.offset, self.count)
     }
+    /// Element `index`; an error when it is out of bounds or runs past DATA.
     pub fn get(self, index: usize) -> Result<Value<'t, 'a>> {
         if index >= self.count {
             return Err(invalid(self.offset, "array index out of bounds"));
@@ -78,6 +87,7 @@ impl<'t, 'a> Value<'t, 'a> {
             .get(self.type_index)
             .map_or("", |t| t.name.as_str())
     }
+    /// The type's format word (see [`Tagfile::format`]).
     pub fn format(self) -> Result<usize> {
         self.tag.format(self.type_index)
     }
@@ -92,6 +102,8 @@ impl<'t, 'a> Value<'t, 'a> {
         }
         false
     }
+    /// The member `name` of a class value, looked up on the class and then its parents. Refused when the value is not
+    /// a class, has no such member, or the member does not fit the class's layout.
     pub fn field(self, name: &str) -> Result<Self> {
         if self.format()? & 15 != 7 {
             return Err(invalid(self.offset, "field access requires a class"));
@@ -125,6 +137,7 @@ impl<'t, 'a> Value<'t, 'a> {
     fn reference_index(self) -> Result<usize> {
         Ok(u32::from_le_bytes(self.tag.array(self.offset)?) as usize)
     }
+    /// The object a pointer value refers to; `None` for a null pointer.
     pub fn pointer(self) -> Result<Option<Self>> {
         if self.format()? & 15 != 6 {
             return Err(invalid(self.offset, "expected pointer"));
@@ -136,6 +149,7 @@ impl<'t, 'a> Value<'t, 'a> {
             self.tag.item(index)?.get(0).map(Some)
         }
     }
+    /// Like [`pointer`](Self::pointer), but a null pointer is an error.
     pub fn dereference(self) -> Result<Self> {
         self.pointer()?
             .ok_or_else(|| invalid(self.offset, "null pointer"))
@@ -161,6 +175,7 @@ impl<'t, 'a> Value<'t, 'a> {
         }
         Err(invalid(self.offset, "unterminated string"))
     }
+    /// The elements of an array value (a stored array or a fixed-size one).
     pub fn array(self) -> Result<Array<'t, 'a>> {
         let format = self.format()?;
         if format & 15 != 8 {
@@ -200,6 +215,7 @@ impl<'t, 'a> Value<'t, 'a> {
         let bytes = self.tag.bytes(self.offset, bits / 8)?;
         Ok(bytes.iter().rev().fold(0u64, |n, &b| (n << 8) | u64::from(b)))
     }
+    /// An integer, sign-extended when its type is signed.
     pub fn signed(self) -> Result<i64> {
         let format = self.format()?;
         let bits = format >> 10;
@@ -225,6 +241,7 @@ impl<'t, 'a> Value<'t, 'a> {
         let value = f32::from_le_bytes(self.tag.array(self.offset)?);
         Ok(value)
     }
+    /// An array of exactly `N` floats.
     pub fn vector<const N: usize>(self) -> Result<[f32; N]> {
         let a = self.array()?;
         if a.len() != N {

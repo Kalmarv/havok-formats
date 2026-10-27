@@ -1,5 +1,5 @@
-//! The Havok animation container of a tagfile (`hkaAnimationContainer`, the class the source's skeleton and animation
-//! files hold as their one named variant), as typed values: skeletons, animations (their headers and, for a spline
+//! The Havok animation container of a tagfile (`hkaAnimationContainer`, the class the skeleton and animation files of
+//! Sekiro and Elden Ring hold as their one named variant), as typed values: skeletons, animations (their headers and, for a spline
 //! compressed one, the compressed data as stored) and the bindings that name which bone each track drives.
 //!
 //! This is reading: every number is the file's. How a spline compressed animation decodes to bone transforms at a time
@@ -18,9 +18,12 @@ pub struct QsTransform {
     pub scale: [f32; 4],
 }
 
+/// `hkaBone`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bone {
+    /// The bone's name.
     pub name: String,
+    /// Whether the bone's translation is locked.
     pub lock_translation: bool,
 }
 

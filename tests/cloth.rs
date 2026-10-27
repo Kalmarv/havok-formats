@@ -1,5 +1,5 @@
 //! Synthetic reflected layouts, including two-element reference arrays and record-valued ids.
-//! The layouts follow the field names in havok_census and HKLib's 2018 class metadata;
+//! The layouts follow the field names of the cloth, ragdoll and constraint classes in Sekiro's tagfiles and HKLib's 2018 class metadata;
 //! no game payload is embedded here.
 use havok_formats::{Tagfile, cloth};
 

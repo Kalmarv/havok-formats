@@ -1,6 +1,7 @@
 //! Hand-written miniature Havok 7.1.0-r1 packfiles: every value is worked out here by hand (no game data, no second
-//! reader), so these check the packfile and physics views against fixtures. Real-data gates for the 490 SHRED files live in
-//! that game's crate (`worlds/shred/tests/collision_disc.rs`).
+//! reader), so these check the packfile and physics views against fixtures. The 490-file Tony Hawk's SHRED check the layout
+//! table in `src/packfile/physics.rs` cites runs in primase, outside this repository:
+//! <https://github.com/Kalmarv/primase/tree/main/worlds/shred/tests/collision_disc.rs>.
 #![allow(clippy::unwrap_used)]
 use havok_formats::packfile::Packfile;
 use havok_formats::packfile::physics::{self, ConvexVertices, ExtendedMesh, MOTION_FIXED, RigidBody, Shape};
