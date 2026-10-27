@@ -1,6 +1,6 @@
 # havok-formats
 
-Bounds-checked Rust readers of the Havok binary data that games store: tagfiles, packfiles and the collision, cloth, ragdoll and animation objects inside them.
+A Rust library that reads Havok physics and animation data as games store it: tagfiles (`.hkx`) and packfiles, and the collision meshes, convex shapes, cloth, ragdolls, skeletons and spline-compressed animations inside them. Every read is bounds-checked, so untrusted files produce errors, not panics.
 
 ## What it reads
 
@@ -46,7 +46,7 @@ The same code is the compile-checked doc test of the crate documentation, and, t
 ## What it guarantees
 
 - **Checked reads.** Every read is bounds-checked. Data that is shorter than it says, refers outside itself, or holds something the reader does not know is an `Error` carrying the byte offset and what was wrong (`Havok at 0x0: section length is less than its header`), not a panic. Truncating a tagfile at every length is covered by a test.
-- **Refusals instead of guesses.** Unknown sections, SDK versions, type flags, packfile versions and layout rules are refused by name. A class or field the file does not have is an error naming it, never a default. Inheritance cycles, oversized items, bad item and patch references, and fixups that point outside the data are refused.
+- **Refusals instead of guesses.** Unknown sections, SDK versions, type flags, packfile versions and layout rules are refused by name. A class or field the file does not have is an error naming it, never a default. Inheritance cycles among types, item and patch references outside the data, and fixups that point outside the data are refused.
 - **No recursion on file data.** Object graphs are views over the borrowed bytes; references are resolved on demand, so cyclic graphs cannot overflow the stack.
 - **Stored values stay as stored.** Integers keep their bits and non-finite floats in unused SIMD lanes are preserved; geometry readers reject non-finite coordinates they use.
 
