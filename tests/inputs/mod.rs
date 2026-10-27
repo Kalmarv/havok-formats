@@ -24,12 +24,6 @@ primase_testdata::inputs! {
             about: r#"one area's high-resolution map collision as its binder stores it: loose Havok 2016.2 tagfiles and the compendium they share, every body and compressed mesh read; toolkit/havok/tests/corpus.rs, schema in toolkit/havok/README.md"#,
             source: r#"the game's own files from the user's install: worlds/fromsoft/examples/corpus_sekiro_havok.rs (the area's `h*.hkxbhd`/`.hkxbdt` binder, each member out of its DCX envelope)"#,
         },
-        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "object-hkx") => {
-            status: Live,
-            gate: true,
-            about: r#"a folder of Havok tagfiles holding object convex bodies, checked against their stored half-spaces; `toolkit/havok/tests/convex_corpus.rs`"#,
-            source: r#"the game's own tagfiles, checked against their own stored half-spaces"#,
-        },
     }
     debug {}
 }
