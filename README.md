@@ -11,6 +11,7 @@ A Rust library that reads Havok physics and animation data as games store it: ta
   - navigation meshes (`hkaiNavMesh`: faces, edges with their opposites and user edges, vertices, ear-clipped triangles), Sekiro's cluster graphs (`hkaiDirectedGraphExplicitCost`), Elden Ring's 6-byte query trees and the user-edge setups, as `navmesh`;
   - cloth (the whole `hclClothData`: sim cloths with their particles, rest poses, constraint sets of every kind the games use, collidables and shapes, and the buffers, transform sets, operators and states around them), ragdoll data and constraint descriptions;
   - skeletons, animation bindings and animation containers, and `hkaSplineCompressedAnimation` decoded to bone transforms at a time;
+  - behaviour tagfiles (`behavior`): typed views of the 93 `hkb*` and `Custom*` classes in Sekiro's and Elden Ring's `behbnd` binders, behaviour graphs with their variables, events and bindings by name, characters and projects;
   - 7.1 `hkp` rigid bodies and collision shapes in packfiles (rigid body, MOPP tree, storage extended mesh, convex vertices, box, sphere, capsule, cylinder, convex translate, list).
 
 It was written against Sekiro (tagfiles, 2016.2; packfiles, versions 9 and 11), Elden Ring (tagfiles, 2018.1; packfiles, versions 9 and 11) and Tony Hawk's SHRED for PS3 (packfiles, version 7). It is an independent reader of the stored formats: it contains no Havok SDK code, and its knowledge of the layouts comes from the files themselves and from public documentation and open-source readers.

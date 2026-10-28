@@ -68,6 +68,18 @@ primase_testdata::inputs! {
             about: r#"the one Elden Ring tagfile whose mesh trees have sections of page above 0 (6,233 sections, pages 1 to 4; the low-resolution map collision `l14_00_00_00`, member `_000000`) and the compendium it shares, loose; tests/paged_mesh.rs decodes every mesh of it"#,
             source: r#"the game's own files from the user's install: the members of the `l14_00_00_00.hkxbhd`/`.hkxbdt` binder out of their DCX envelopes, picked by reading every map `l` binder of the install for sections of page above 0"#,
         },
+        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-behavior") => {
+            status: Live,
+            gate: false,
+            about: r#"every distinct behaviour tagfile of the install (an `hkb*` or `Custom*` class in its type table): 305 files, loose, and `manifest.tsv` (sha256, file, compendium, binder, member) naming each of the 315 binder members they were found in (147 behaviour graphs, 79 characters and 79 projects); tests/behavior.rs reads them all through the typed views"#,
+            source: r#"the game's own files from the user's install: every archive entry walked (named or not, nested BND4 and DCX opened), each TAG0 member whose type table has an `hkb*` or `Custom*` class taken out of its DCX envelope and deduplicated by sha256 (all in the 79 `chr/*.behbnd.dcx` binders)"#,
+        },
+        Query::Oracle(OracleSet::Corpus, Game::Elden, "havok-behavior") => {
+            status: Live,
+            gate: false,
+            about: r#"every distinct behaviour tagfile of the install: 1,021 files, loose, and `manifest.tsv` naming each of the 1,119 binder members they were found in (461 behaviour graphs, 280 characters and 280 projects); tests/behavior.rs reads them all through the typed views"#,
+            source: r#"the game's own files from the user's install, found as for Sekiro (all in the 280 `chr/*.behbnd.dcx` binders)"#,
+        },
         Query::Oracle(OracleSet::Corpus, Game::Shred, "havok-packfiles") => {
             status: Live,
             gate: true,

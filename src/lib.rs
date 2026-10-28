@@ -12,6 +12,8 @@
 //! - **Packfiles** (version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian; versions 9 and 11,
 //!   `hk_2013.1.0-r1` and `hk_2014.1.0-r1`, 8-byte pointers, little endian): [`packfile`], their editable image
 //!   ([`packfile::image`]) and the class metadata some of them carry ([`packfile::reflection`]).
+//! - Behaviour tagfiles of Sekiro and Elden Ring (`hkb*` and `Custom*` classes): typed views of every class, and a reader
+//!   of the behaviour graphs, characters and projects they hold ([`behavior`]).
 //! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`], with their bounding-volume trees
 //!   [`mesh_trees`] and [`simd_tree`]), extern triangle meshes ([`extern_mesh`]),
 //!   convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, animation bindings and spline
@@ -87,6 +89,7 @@ mod inputs;
 
 pub mod animation;
 mod animation_write;
+pub mod behavior;
 mod bvtree;
 pub mod cloth;
 pub mod convex;
