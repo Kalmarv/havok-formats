@@ -1,9 +1,9 @@
 //! Triangulating a simple polygon given by its corner positions in 3-space: [`triangulate`].
 //!
-//! A navigation face is a polygon of up to a few dozen corners, not always convex (about 5 % of Sekiro's faces and 2 % of Elden
-//! Ring's are not, seen from above) and not always planar (corners lie up to 1.4 m off the face's mean plane), so a fan
-//! from one corner is wrong for some of them. The polygon is projected along its Newell normal's largest axis and cut
-//! into triangles by ear clipping in that plane.
+//! A navigation face is a polygon of up to 91 corners (Sekiro's most is 31), not always convex (about 5 % of Sekiro's
+//! faces and 2 % of Elden Ring's are not, seen from above) and not always planar (corners lie up to 1.4 m off the
+//! face's mean plane), so a fan from one corner is wrong for some of them. The polygon is projected along its Newell
+//! normal's largest axis and cut into triangles by ear clipping in that plane.
 //!
 //! This file uses only the standard library, so it can be read and run on its own.
 #![deny(

@@ -1,8 +1,8 @@
 //! Havok AI navigation data as the navmesh binders (`*.nvmhktbnd.dcx`) of Sekiro and Elden Ring store it: a polygon mesh
 //! ([`NavMesh`], `hkaiNavMesh`), in Sekiro the cluster graph over it ([`NavGraph`], `hkaiDirectedGraphExplicitCost`), in
 //! Elden Ring the bounding-volume tree its queries walk ([`NavTree`], the `hkcdStaticAabbTree` of an
-//! `hkaiStaticTreeNavMeshQueryMediator` with 6-byte nodes), and the user-edge setups that made the jump and ladder links
-//! ([`UserEdgeSetup`]). [`nav_data`] reads a whole file; the other readers take one object.
+//! `hkaiStaticTreeNavMeshQueryMediator` with 6-byte nodes), and the user-edge setups that say how two boxes in the world
+//! are joined by user edges ([`UserEdgeSetup`]). [`nav_data`] reads a whole file; the other readers take one object.
 //!
 //! # The mesh
 //!
@@ -21,11 +21,11 @@
 //! # What is checked
 //!
 //! Each rule above and below holds in every tagfile of the Sekiro (1,509) and Elden Ring (7,438) navmesh binders. The
-//! readers refuse what they do not know: streaming sets (none occurs), edge or vertex indices outside the mesh, a face whose edges do not form
-//! a closed ring, an edge in two faces or none, an opposite edge that does not point back, data arrays that are not
-//! faces or edges times the stride, a graph whose edge ranges do not tile its edges, a tree that is not a valid
-//! pre-order tree. The fields whose meaning the files do not show (`flags`, the face and edge data words, the padding
-//! words) are kept as stored.
+//! readers refuse what they do not know: streaming sets (none occurs), edge or vertex indices outside the mesh, a face
+//! whose edges do not form a closed ring, an edge in two faces or none, an opposite edge that does not point back, data
+//! arrays that are not faces or edges times the stride, a graph whose edge ranges do not tile its edges, a tree that is
+//! not a valid pre-order tree. The fields whose meaning the files do not show (`flags`, the face and edge data words)
+//! are kept as stored; the padding words are not read.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -90,8 +90,8 @@ pub struct NavEdge {
     pub b: usize,
     /// `oppositeEdge` and `oppositeFace`; `None` for an edge on the mesh's boundary (both stored as `0xFFFFFFFF`).
     pub opposite: Option<NavLink>,
-    /// `flags`: 4 on every regular edge; 20 or 52 on user edges (bits 16 and 32 are set on user edges only; what the
-    /// bits are is not shown by the files).
+    /// `flags`: 4 on every regular edge; 20 or 52 on user edges (the values 16 and 32 are set on user edges only; what
+    /// the bits are is not shown by the files).
     pub flags: u8,
     /// `userEdgeCost`: 0 on every edge of both installs.
     pub user_cost: f32,
@@ -1485,7 +1485,7 @@ mod tests {
     #[test]
     fn broken_trees_are_refused_and_an_empty_one_is_kept() {
         let domain = [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]];
-        // a second child at the end of the subtree, a leaf that does not end its subtree, an internal node whose step is 0
+        // a second child past the subtree, a leaf that does not end its subtree, an internal node whose step is 0
         for (nodes, what) in [
             (
                 vec![node([0; 3], 0x80_0002), node([0; 3], 0), node([0; 3], 1)],
