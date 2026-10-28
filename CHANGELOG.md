@@ -14,6 +14,13 @@ Packfiles (`packfile`, `packfile::physics`):
   exactly `size | 0x80000000` and an empty array has no fixup; a pointer slot that has a fixup holds zero, as one without
   does (every array and pointer the views read; the census found no exception in 114,784 array headers and 487,981
   pointer slots).
+- A packfile this reader refuses is named. The refusal for its version, pointer size, byte order, layout rules or contents
+  version adds the contents version its header states and the SDK its first two class names (`hkClass`, `hkClassMember`)
+  belong to: `Havok 7.1.0-r1` (`14425E51`, `4A986551`), `Havok 2013.1 to 2014.2` (`33D42383`, `B0EFA719`: all 29 distinct
+  packfiles of Sekiro and the 6 of Elden Ring, versions 9 and 11, contents versions `hk_2013.1.0-r1` and
+  `hk_2014.1.0-r1`; the signatures do not tell those apart), or the two signatures as stored. The file version is read in
+  the byte order the layout rules name: a little-endian file's version 11 was reported as 184549376, and a little-endian
+  version 7 file as a wrong version instead of a wrong byte order.
 - `RigidBody` reads `quality_type`, `allowed_penetration_depth`, `object_radius`, `linear_damping`, `angular_damping`,
   `inverse_inertia`, `inverse_mass`, `center_of_mass_local` and `gravity_factor`. A fixed body has no inverse inertia and
   no inverse mass and a dynamic one has all four positive; both velocities are zero; the swept transform's two centres

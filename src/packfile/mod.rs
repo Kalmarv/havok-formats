@@ -38,7 +38,11 @@
 )]
 use std::collections::BTreeMap;
 
-use primase_foundations::bytes::{BoundsError, Endian::Big, View};
+use primase_foundations::bytes::{
+    BoundsError,
+    Endian::{Big, Little},
+    View,
+};
 
 use crate::{Error, Result, invalid};
 
@@ -164,6 +168,71 @@ fn sum(offset: usize, a: usize, b: usize) -> Result<usize> {
         .ok_or_else(|| invalid(offset, "offset overflows the address space"))
 }
 
+/// The first two class names of a packfile (`hkClass`, then `hkClassMember`) carry the signatures of the SDK's class
+/// definitions, so the SDK of a file this reader refuses shows without reading its layout. The first row is the
+/// `Havok-7.1.0-r1` this reader reads (all 490 Tony Hawk's SHRED files). The second is on every packfile of the games'
+/// other Havok versions: the 29 distinct ones of Sekiro (3 of contents version `hk_2013.1.0-r1`, 26 of `hk_2014.1.0-r1`)
+/// and the 6 of Elden Ring (3 and 3), and it is the pair a 2014.2 reflection dump gives (sourced), so these signatures
+/// do not tell 2013.1, 2014.1 and 2014.2 apart; the header's contents version does.
+const SDK_OF_FIRST_CLASSES: [(&str, u32, u32); 2] = [
+    ("Havok 7.1.0-r1", 0x1442_5E51, 0x4A98_6551),
+    ("Havok 2013.1 to 2014.2", 0x33D4_2383, 0xB0EF_A719),
+];
+
+/// What a packfile this reader refuses is, as text to append to the refusal: the contents version its header names
+/// (unless `contents` is false) and the SDK its first two class names' signatures belong to, or, when they are
+/// none the reader knows, the signatures themselves. Empty when the file has no readable class-name section. The section
+/// is found by its tag in the first 256 bytes, so the header layout of the file's version does not matter; its words
+/// are read in the byte order the layout rules name.
+fn foreign_sdk(bytes: &[u8], contents: bool) -> String {
+    let text = bytes
+        .get(0x28..0x38)
+        .map(|t| t.split(|&b| b == 0).next().unwrap_or_default())
+        .filter(|t| contents && !t.is_empty() && t.iter().all(u8::is_ascii_graphic))
+        .map(|t| format!("contents version {:?}", String::from_utf8_lossy(t)));
+    let classes = first_classes(bytes).map(|(class, member)| {
+        match SDK_OF_FIRST_CLASSES
+            .iter()
+            .find(|&&(_, a, b)| (a, b) == (class, member))
+        {
+            Some((sdk, ..)) => {
+                format!("class names of {sdk} (hkClass {class:#010x}, hkClassMember {member:#010x})")
+            }
+            None => format!(
+                "hkClass {class:#010x} and hkClassMember {member:#010x} are those of no SDK this reader knows"
+            ),
+        }
+    });
+    let parts: Vec<String> = text.into_iter().chain(classes).collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", parts.join(", "))
+    }
+}
+
+/// The signatures of the first two class names if they are `hkClass` and `hkClassMember`.
+fn first_classes(bytes: &[u8]) -> Option<(u32, u32)> {
+    let order = if *bytes.get(0x11)? != 0 { Little } else { Big };
+    let head = bytes.get(..0x100.min(bytes.len()))?;
+    let tag = head.windows(14).position(|w| w == b"__classnames__")?;
+    let v = View::new(bytes);
+    let mut at = usize::try_from(v.u32(tag.checked_add(20)?, order).ok()?).ok()?;
+    let mut found = [(&[][..], 0u32); 2];
+    for slot in &mut found {
+        let signature = v.u32(at, order).ok()?;
+        if *bytes.get(at.checked_add(4)?)? != 9 {
+            return None;
+        }
+        let name_at = at.checked_add(5)?;
+        let name = bytes.get(name_at..)?.split(|&b| b == 0).next()?;
+        *slot = (name, signature);
+        at = name_at.checked_add(name.len())?.checked_add(1)?;
+    }
+    let [(first, class), (second, member)] = found;
+    (first == b"hkClass" && second == b"hkClassMember").then_some((class, member))
+}
+
 fn to_usize(w: u32) -> usize {
     usize::try_from(w).unwrap_or(usize::MAX)
 }
@@ -180,29 +249,48 @@ impl<'a> Packfile<'a> {
         if magic != MAGIC {
             return Err(invalid(0, "not a Havok packfile (magic)"));
         }
-        let version = u32_at(0x0C, "the file version")?;
+        // the header words of a little-endian file are little endian: the version is read in the order the layout
+        // rules name (a file too short to name one is read big endian)
+        let order = match v.array::<4>(0x10) {
+            Ok([_, little, ..]) if little != 0 => Little,
+            _ => Big,
+        };
+        let version = v.u32(0x0C, order).map_err(bounds(0x0C, "the file version"))?;
         if version != 7 {
             return Err(invalid(
                 0x0C,
-                format!("unsupported packfile version {version} (7 only)"),
+                format!(
+                    "unsupported packfile version {version} (7 only){}",
+                    foreign_sdk(bytes, true)
+                ),
             ));
         }
         let layout = v.array::<4>(0x10).map_err(bounds(0x10, "the layout rules"))?;
         let [ptr, little, reuse, empty_base] = layout;
         if ptr != 4 {
-            return Err(invalid(0x10, format!("unsupported pointer size {ptr} (4 only)")));
+            return Err(invalid(
+                0x10,
+                format!(
+                    "unsupported pointer size {ptr} (4 only){}",
+                    foreign_sdk(bytes, true)
+                ),
+            ));
         }
         if little != 0 {
             return Err(invalid(
                 0x11,
-                "unsupported byte order: little endian (big endian only)",
+                format!(
+                    "unsupported byte order: little endian (big endian only){}",
+                    foreign_sdk(bytes, true)
+                ),
             ));
         }
         if reuse != 1 || empty_base != 1 {
             return Err(invalid(
                 0x12,
                 format!(
-                    "unsupported layout rules: reuse padding {reuse}, empty base optimisation {empty_base} (1, 1 only)"
+                    "unsupported layout rules: reuse padding {reuse}, empty base optimisation {empty_base} (1, 1 only){}",
+                    foreign_sdk(bytes, true)
                 ),
             ));
         }
@@ -212,8 +300,9 @@ impl<'a> Packfile<'a> {
             return Err(invalid(
                 0x28,
                 format!(
-                    "unsupported contents version {:?} ({CONTENTS_VERSION} only)",
-                    String::from_utf8_lossy(version_text)
+                    "unsupported contents version {:?} ({CONTENTS_VERSION} only){}",
+                    String::from_utf8_lossy(version_text),
+                    foreign_sdk(bytes, false)
                 ),
             ));
         }

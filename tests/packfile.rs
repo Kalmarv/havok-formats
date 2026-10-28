@@ -356,7 +356,12 @@ fn refusals_name_the_offset() {
     let e = refuse(&patch(0x0C, &[0, 0, 0, 8]));
     assert!(e.contains("version 8") && e.contains("0xc"), "{e}");
     assert!(refuse(&patch(0x10, &[8])).contains("pointer size 8"));
-    assert!(refuse(&patch(0x11, &[1])).contains("little endian"));
+    // a little-endian file stores its header words little endian too: version 7, and the flag
+    let mut little = good.clone();
+    little[0x0C..0x10].copy_from_slice(&7u32.to_le_bytes());
+    little[0x11] = 1;
+    let e = refuse(&little);
+    assert!(e.contains("little endian") && e.contains("0x11"), "{e}");
     assert!(refuse(&patch(0x12, &[0])).contains("reuse padding 0"));
     assert!(refuse(&patch(0x28, b"Havok-5.5.0-r1\0")).contains("contents version"));
     // the class-name section is the first at 0x40 + 144; break its separator byte
@@ -1077,4 +1082,159 @@ fn every_shape_class_has_a_zero_type_word_and_a_user_data_word() {
         let e = Shape::read(&p, 0x40).unwrap_err().to_string();
         assert!(e.contains("shape type word"), "{class}: {e}");
     }
+}
+
+/// The head of a packfile of another SDK: the magic, the file version and layout rules in the file's byte order, the
+/// contents version, and (after a 16-byte header extension, as later versions have) a first section header whose tag is
+/// `__classnames__`, then the class names `hkClass` and `hkClassMember` with the given signatures. Nothing else of the
+/// file: the reader refuses it before it reads further.
+fn foreign(version: u32, rules: [u8; 4], contents: &[u8], signatures: [u32; 2]) -> Vec<u8> {
+    let little = rules[1] != 0;
+    let word = |v: u32| if little { v.to_le_bytes() } else { v.to_be_bytes() };
+    let mut out = vec![0x57, 0xE0, 0xE0, 0x57, 0x10, 0xC0, 0xC0, 0x10];
+    out.extend(word(0));
+    out.extend(word(version));
+    out.extend(rules);
+    out.extend(word(3));
+    out.resize(0x28, 0);
+    let mut text = contents.to_vec();
+    text.resize(16, 0);
+    out.extend(text);
+    out.resize(0x50, 0);
+    let mut tag = b"__classnames__".to_vec();
+    tag.resize(19, 0);
+    tag.push(0xFF);
+    out.extend(tag);
+    out.extend(word(0x80));
+    out.resize(0x80, 0);
+    for (signature, name) in signatures.into_iter().zip([&b"hkClass"[..], b"hkClassMember"]) {
+        out.extend(word(signature));
+        out.push(9);
+        out.extend(name);
+        out.push(0);
+    }
+    out
+}
+
+#[test]
+fn a_packfile_of_another_sdk_is_named_by_its_first_class_names() {
+    // version 11 and 9 files of the 2013.1 to 2014.2 generation: little endian, 8-byte pointers
+    for (version, contents) in [
+        (11, &b"hk_2014.1.0-r1"[..]),
+        (9, b"hk_2013.1.0-r1"),
+        (11, b"hk_2014.2.0-r1"),
+    ] {
+        let bytes = foreign(version, [8, 1, 0, 1], contents, [0x33D4_2383, 0xB0EF_A719]);
+        let e = refuse(&bytes);
+        let want = format!(
+            "unsupported packfile version {version} (7 only): contents version \"{}\", class names of Havok 2013.1 to 2014.2 (hkClass 0x33d42383, hkClassMember 0xb0efa719)",
+            String::from_utf8_lossy(contents)
+        );
+        assert!(e.contains(&want), "{e}");
+        assert!(e.contains("0xc"), "{e}");
+    }
+    // the same signatures in another order are the signatures of no SDK it knows, and are given as stored
+    let e = refuse(&foreign(
+        11,
+        [8, 1, 0, 1],
+        b"hk_2014.1.0-r1",
+        [0xB0EF_A719, 0x33D4_2383],
+    ));
+    assert!(
+        e.contains("hkClass 0xb0efa719 and hkClassMember 0x33d42383 are those of no SDK this reader knows"),
+        "{e}"
+    );
+    // a big endian file of 4-byte pointers that is not version 7: the 7.1 class names, and the byte order is honoured
+    let e = refuse(&foreign(
+        8,
+        [4, 0, 1, 1],
+        b"Havok-7.1.0-r1",
+        [0x1442_5E51, 0x4A98_6551],
+    ));
+    assert!(e.contains("unsupported packfile version 8 (7 only)"), "{e}");
+    assert!(
+        e.contains("class names of Havok 7.1.0-r1 (hkClass 0x14425e51, hkClassMember 0x4a986551)"),
+        "{e}"
+    );
+}
+
+#[test]
+fn the_other_refusals_of_a_foreign_file_name_it_too() {
+    // version 7 with 8-byte pointers: the pointer size is refused, and the class names say whose file it is
+    let e = refuse(&foreign(
+        7,
+        [8, 0, 1, 1],
+        b"Havok-7.1.0-r1",
+        [0x1442_5E51, 0x4A98_6551],
+    ));
+    assert!(e.contains("unsupported pointer size 8 (4 only): contents version \"Havok-7.1.0-r1\", class names of Havok 7.1.0-r1"), "{e}");
+    let e = refuse(&foreign(
+        7,
+        [4, 1, 1, 1],
+        b"hk_2014.1.0-r1",
+        [0x33D4_2383, 0xB0EF_A719],
+    ));
+    assert!(e.contains("little endian (big endian only): contents version \"hk_2014.1.0-r1\", class names of Havok 2013.1 to 2014.2"), "{e}");
+    let e = refuse(&foreign(
+        7,
+        [4, 0, 0, 1],
+        b"hk_2014.1.0-r1",
+        [0x33D4_2383, 0xB0EF_A719],
+    ));
+    assert!(
+        e.contains("reuse padding 0") && e.contains("class names of Havok 2013.1 to 2014.2"),
+        "{e}"
+    );
+    // the contents version is refused with its text once, and the class names after it
+    let e = refuse(&foreign(
+        7,
+        [4, 0, 1, 1],
+        b"Havok-6.6.0-b1",
+        [0x1442_5E51, 0x4A98_6551],
+    ));
+    assert!(e.contains("unsupported contents version \"Havok-6.6.0-b1\" (Havok-7.1.0-r1 only): class names of Havok 7.1.0-r1"), "{e}");
+    assert_eq!(e.matches("Havok-6.6.0-b1").count(), 1, "{e}");
+    // the fixture's first class is the root container, not hkClass, so only the contents version is named
+    let mut good = scene();
+    good[0x0C..0x10].copy_from_slice(&6u32.to_be_bytes());
+    let e = refuse(&good);
+    assert!(
+        e.ends_with("unsupported packfile version 6 (7 only): contents version \"Havok-7.1.0-r1\""),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_foreign_file_without_readable_class_names_gets_the_plain_refusal() {
+    // the header only; the version of a file too short to say its byte order is read big endian
+    let mut head = vec![0x57, 0xE0, 0xE0, 0x57, 0x10, 0xC0, 0xC0, 0x10, 0, 0, 0, 0];
+    head.extend(8u32.to_be_bytes());
+    assert_eq!(
+        refuse(&head),
+        "Havok at 0xc: unsupported packfile version 8 (7 only)"
+    );
+    // a section table whose class names are not hkClass, hkClassMember, or that run off the file
+    let good = foreign(11, [8, 1, 0, 1], b"hk_2014.1.0-r1", [0x33D4_2383, 0xB0EF_A719]);
+    let plain = |bytes: &[u8]| {
+        refuse(bytes)
+            .split_once("(7 only)")
+            .map(|(_, rest)| rest.to_owned())
+    };
+    let mut renamed = good.clone();
+    renamed[0x85..0x8C].copy_from_slice(b"hkClasz");
+    assert_eq!(
+        plain(&renamed).as_deref(),
+        Some(": contents version \"hk_2014.1.0-r1\"")
+    );
+    for cut in [0x30, 0x60, 0x86, 0x90] {
+        let rest = plain(&good[..cut]).unwrap();
+        assert!(!rest.contains("class names"), "cut at {cut:#x}: {rest}");
+    }
+    // no tag at all
+    let mut untagged = good.clone();
+    untagged[0x50..0x5E].copy_from_slice(b"__classnamez__");
+    assert_eq!(
+        plain(&untagged).as_deref(),
+        Some(": contents version \"hk_2014.1.0-r1\"")
+    );
 }
