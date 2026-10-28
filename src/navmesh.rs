@@ -1014,8 +1014,8 @@ impl NavTree {
 /// An oriented box of a [`UserEdgeSetup`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UserEdgeBox {
-    /// The rotation as stored: three columns of four floats (the fourth of each is padding).
-    pub rotation: [f32; 12],
+    /// The rotation's three columns (xyz each; the stored fourth float of a column is padding and not part of the data).
+    pub columns: [[f32; 3]; 3],
     /// The translation (xyz).
     pub translation: [f32; 3],
     /// The half extents (xyz).
@@ -1088,11 +1088,14 @@ impl UserEdgeSetup {
 }
 
 fn read_box(obb: Value<'_, '_>) -> Result<UserEdgeBox> {
-    let transform = obb.field("transform")?;
-    let [tx, ty, tz, _] = transform.field("translation")?.vector::<4>()?;
+    // an `hkTransform` is a flat array of 16 floats in the file: the rotation's three columns of four (the fourth float
+    // of each is padding: 0 in Elden Ring, stale values in all but two of Sekiro's boxes), then the translation and one
+    // more float (0 in Sekiro, not 0 in Elden Ring)
+    let [a0, a1, a2, _, b0, b1, b2, _, c0, c1, c2, _, tx, ty, tz, _] =
+        obb.field("transform")?.vector::<16>()?;
     let [hx, hy, hz, _] = obb.field("halfExtents")?.vector::<4>()?;
     Ok(UserEdgeBox {
-        rotation: transform.field("rotation")?.vector::<12>()?,
+        columns: [[a0, a1, a2], [b0, b1, b2], [c0, c1, c2]],
         translation: [tx, ty, tz],
         half_extents: [hx, hy, hz],
     })

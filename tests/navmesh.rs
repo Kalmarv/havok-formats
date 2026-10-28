@@ -264,6 +264,7 @@ fn read(game: Game, expected: &[Expected]) -> Result<(), Box<dyn std::error::Err
         );
         triangles(&data, want)?;
         trees(&data, name);
+        setups(&data, name);
         // a cluster graph is the clusters' adjacency (checked by the reader; stated here for the Sekiro files)
         assert_eq!(
             data.graph.is_some(),
@@ -336,6 +337,30 @@ fn triangles(data: &NavData, want: &Expected) -> Result<(), Box<dyn std::error::
         want.file
     );
     Ok(())
+}
+
+/// The user-edge setups: both boxes' rotation columns orthonormal (the census found them so in all 4,272 boxes of both
+/// installs), positive half extents, `worldUpA` straight up, `forceAlign` set.
+fn setups(data: &NavData, name: &str) {
+    let dot = |u: [f32; 3], v: [f32; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    for setup in data.user_edge_setups.iter().flatten() {
+        for b in [&setup.box_a, &setup.box_b] {
+            let [c0, c1, c2] = b.columns;
+            for unit in [dot(c0, c0), dot(c1, c1), dot(c2, c2)] {
+                assert!((unit - 1.0).abs() < 1e-3, "{name}: {unit}");
+            }
+            for orthogonal in [dot(c0, c1), dot(c0, c2), dot(c1, c2)] {
+                assert!(orthogonal.abs() < 1e-3, "{name}: {orthogonal}");
+            }
+            assert!(b.half_extents.iter().all(|h| *h > 0.0), "{name}");
+        }
+        assert_eq!(setup.world_up_a, [0.0, 1.0, 0.0], "{name}");
+        assert!(setup.force_align, "{name}");
+        assert!(
+            matches!(setup.direction, 1 | 3) && matches!(setup.space, 0 | 1),
+            "{name}"
+        );
+    }
 }
 
 /// The tree: every face a leaf once, every face corner inside its leaf's box within the census's 0.5 mm.
