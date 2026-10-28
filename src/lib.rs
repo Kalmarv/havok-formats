@@ -21,6 +21,15 @@
 //!   convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, animation bindings and spline
 //!   compressed animation ([`animation`], [`spline`]), navigation meshes, their cluster graphs and query trees
 //!   ([`navmesh`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles ([`packfile::physics`]).
+
+//!   compressed animation ([`animation`], [`spline`]), the typed atoms of ragdoll and other constraints
+//!   ([`constraint`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles ([`packfile::physics`]) with the
+//!   MOPP code that indexes their triangles ([`mopp`]). The convex point sets of custom mesh primitives are decoded
+//!   ([`PointSet`]).
+//! - Collision written from triangles: [`build_compressed_mesh`] makes the mesh tree arrays of an `hknp` compressed mesh
+//!   ([`BuiltMesh`]: sections, packed and shared vertices, section and mesh trees, the simd tree) and
+//!   [`replace_compressed_mesh`] puts them into the shape of a [`TagfileImage`]; [`replace_extern_mesh`] does the same
+//!   for an extern mesh. The layouts come from the file's own type table.
 //!
 //! It was written against Sekiro (tagfiles, 2016.2; packfiles, versions 9 and 11), Elden Ring (tagfiles, 2018.1;
 //! packfiles, versions 9 and 11) and Tony Hawk's SHRED for PS3 (packfiles, version 7).

@@ -42,6 +42,34 @@ classes in `chr/*.behbnd.dcx`, and a reader of the three kinds of file those bin
   tables that tie a behaviour graph together and sums over clip generators, states, transitions and manual selectors equal to
   a census made without this crate (tests/behavior.rs).
 
+Collision written from triangles, the MOPP code of SHRED's collision walked, the point sets of custom primitives decoded,
+and the atoms of ragdoll constraints typed. Checked on the games' own files: the 1,705 MOPP codes of the 490 SHRED
+packfiles, and (in fromsoft-formats) every compressed and extern mesh of the Sekiro and Elden Ring collision, which is
+rebuilt from its decoded triangles, written into its file's image and read back.
+
+- `mopp` (new): `walk` (the shape keys a code's terminals name and the opcodes executed), `query` (a box through the
+  code), `shape_key` / `split_shape_key`, `is_degenerate` (the squared cross product under 1e-7, which separates 8,755 of
+  the 8,760 triangles the codes leave out), `check_mesh` / `check_code` (the terminals against the triangles of the mesh
+  under the code) and `MoppWalk`, `MoppCheck`, `SUBPART_INDEX_BITS`. Every one of the 1,705 codes walks to the end with
+  the 68 opcodes the command table lists (any other is refused); the terminals of the 1,704 codes over a mesh are the
+  mesh's keys without the degenerate triangles (bar five thin ones in three meshes) and name no triangle the mesh lacks;
+  the query with a triangle's own box returns its key for all 637,213 triangles that have a terminal.
+- `CustomPrimitive::points` and `PointSet` (new): the decoded points of a `0x52` custom primitive (11/11/10-bit codes over
+  the box of the primitive's leaf in the section tree). 27 Sekiro records (304 points) and 28 Elden Ring records
+  (336 points) decode inside their leaf boxes. `CustomPrimitive` is no longer `Eq` (it holds floats);
+  `CustomKind::Unread` keeps its name so that readers that tell it from `Extern` still do.
+- `constraint` (new): `read_constraint_data` reads the data of an `hknpConstraintCinfo` into `ConstraintData` (ragdoll,
+  limited hinge, hinge, ball and socket, fixed, wheel and the breakable wrapper) with each atom typed and its `type`
+  word checked. The 2,499 Sekiro and 7,934 Elden Ring objects read.
+- `build_compressed_mesh`, `BuiltMesh`, `BuiltSection`, `MeshSource`, `compressed_mesh_shapes` and
+  `replace_compressed_mesh` (new): triangles to the arrays of a compressed mesh tree, written into a `TagfileImage`
+  by the file's own type table (either SDK layout, either simd encoding, the shape's key bits, interior flags and
+  `triangleIndexToShapeKey`). `replace_extern_mesh`, `extern_mesh_shapes` and `ExternSource` do the same for
+  `hknpExternMeshShape` in the form its class stores (the 6-byte aabb tree of class 2, the four-lane simd tree of class 3).
+- `encode_tree`, `balanced_shape`, `shape_of`, `Shape`, `EncodedTree` and `Aabb` (new): the static bounding-volume tree
+  encoder behind them; `build_simd_tree`, `SimdLeaf`, `SimdEncoding` and `EMPTY_BOX`: the four-lane tree, numbered the
+  way both games' files are.
+- `NodeWidth::Six` (new variant): `BvTree::decode` reads the 6-byte nodes of an extern mesh's aabb tree.
 ## 0.8.1 (2026-10-28)
 
 Spline compression written as well as read: the stored block values kept exactly, an encoder, and an animation written
