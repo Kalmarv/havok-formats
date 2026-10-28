@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-27)
 
 Float tracks, and the cutscene binders' rotations, read. A read of both installs (19,137 + 68,722 distinct tagfiles) now
 parses all 60,209 spline animations, the 11,581 of Sekiro and 48,628 of Elden Ring, where 0.4.0 refused 608 for their
