@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `extern_mesh` and `ExternMesh`: the triangles of an `hknpExternMeshShape` (the shape of every body of the map
+  collision `f` binders), read from its `hknpDefaultExternMeshShapeGeometry` and `hkGeometry`: vertices (finite, fourth
+  lane exactly 1), triangles (every index names a vertex) and their materials, and 2018.1's
+  `useTriangleMaterialAsShapeTag`. A read of every `f` binder of both installs (12,688 Sekiro and 264,858 Elden Ring
+  bodies, 539,652 + 2,233,804 vertices, 537,436 + 1,707,650 triangles) accepts every body.
+
 ## 0.4.0 (2026-10-27)
 
 The checks that a census of every Sekiro and Elden Ring tagfile, type table and spline animation settled. Each new

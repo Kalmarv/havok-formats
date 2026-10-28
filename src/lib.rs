@@ -9,9 +9,10 @@
 //!   (`TCM0`): [`Tagfile`] and [`Compendium`]. Class layouts come from the file's own type metadata, so any class
 //!   can be read field by field through [`Value`] and [`Array`].
 //! - **Packfiles** (version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian): [`packfile`].
-//! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`]), convex shapes ([`convex`]), cloth and
-//!   ragdoll data ([`cloth`]), skeletons, animation bindings and spline compressed animation ([`animation`],
-//!   [`spline`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles ([`packfile::physics`]).
+//! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`]), extern triangle meshes ([`extern_mesh`]),
+//!   convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, animation bindings and spline
+//!   compressed animation ([`animation`], [`spline`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles
+//!   ([`packfile::physics`]).
 //!
 //! It was written against Sekiro (tagfiles, 2016.2), Elden Ring (tagfiles, 2018.1) and Tony Hawk's SHRED for PS3
 //! (packfiles).
@@ -80,12 +81,14 @@ mod inputs;
 pub mod animation;
 pub mod cloth;
 pub mod convex;
+mod extern_mesh;
 mod mesh;
 pub mod packfile;
 mod section;
 pub mod spline;
 mod spline_sample;
 
+pub use extern_mesh::{ExternMesh, extern_mesh};
 pub use mesh::{
     CompressedMesh, CustomKind, CustomPrimitive, MeshSection, ShapeInstance, Triangle, compressed_mesh,
     extern_shapes, mesh_sections,
