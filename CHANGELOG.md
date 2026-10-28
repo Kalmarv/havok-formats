@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+The checks and members a census of the 490 Tony Hawk's SHRED packfiles and of every Sekiro and Elden Ring tagfile
+settled. Each new refusal is of an input none of those files has: a read of the 490 packfiles (1,470 sections) refuses
+none, and a read of both installs (19,137 + 68,722 distinct tagfiles, 16 + 36 compendia) refuses none.
+
+Packfiles (`packfile`, `packfile::physics`):
+
+- Container: a section header's byte 19 is `0xFF` and the bytes between the tag's NUL and byte 19 are zero (1,470
+  headers); a fixup source is 4-byte aligned, a local fixup's target 4-byte and a global fixup's 16-byte aligned, and an
+  object starts on a 16-byte boundary (all 130,610 fixups and 47,915 objects). An array header's capacity word is
+  exactly `size | 0x80000000` and an empty array has no fixup; a pointer slot that has a fixup holds zero, as one without
+  does (every array and pointer the views read; the census found no exception in 114,784 array headers and 487,981
+  pointer slots).
+- `RigidBody` reads `quality_type`, `allowed_penetration_depth`, `object_radius`, `linear_damping`, `angular_damping`,
+  `inverse_inertia`, `inverse_mass`, `center_of_mass_local` and `gravity_factor`. A fixed body has no inverse inertia and
+  no inverse mass and a dynamic one has all four positive; both velocities are zero; the swept transform's two centres
+  of mass and two rotations are equal (12,789 bodies, 2,021 of them fixed).
+- `ExtendedMesh` reads `welding_type`, `default_collision_filter_info`, `cached_num_child_shapes`, `triangle_radius` and
+  `user_data`, and refuses a count above the triangle total, a shape-storage array that is not empty and non-zero
+  padding at `+0xD9..+0xDC` and `+0xE8..+0xF0` (1,758 meshes).
+- `ConvexVertices` reads `faces` from the shape's `hkpConvexVerticesConnectivity` (8,751 of 8,780 shapes; 255,593 faces
+  over 1,420,968 indices) and refuses a count list that does not use every index once, an index that names no vertex, and
+  fewer planes than faces. It also reads `user_data` and refuses a pointer at `+0x50` or non-zero bytes at `+0x64..+0x70`.
+  The stored planes are still not checked for unit normals or containment: 221 shapes have one other normal length and
+  222 have a vertex outside their planes.
+- `MoppCode` (new) reads `hkpMoppCode`: `offset`, `scale`, `build_type` and the `code` bytes (1,705 codes, 5,917,936
+  bytes); `Shape::Mopp` names its code.
+- `Shape::Capsule` refuses end points whose fourth lanes are not the radius (96 capsules). `Shape::List` children are
+  `ListChild`s (new) with the record's `collision_filter_info`; the record's other two words must be zero (41 records).
+  Every shape object's `+0x0C` must be zero (15,935 shapes) and `shape_user_data` (new) reads `+0x08`.
+- Breaking: `RigidBody`, `ExtendedMesh` and `ConvexVertices` have new public fields; `Shape::Mopp` has a new field
+  `code` and `Shape::List::children` is a `Vec<ListChild>`; `physics::DECODED` has 13 entries and `RECOGNISED` 7 (the
+  MOPP code and the convex connectivity move from the second to the first).
+
+Tagfiles (`Tagfile`, `Type`, `cloth`):
+
+- A member record's flags have `0x20` set and no bit outside `0x27` (816,249 records in 229 + 875 type tables:
+  `0x20` to `0x25`); a type that stores a subtype is a pointer or an array by its own format or its nearest parent's
+  (Sekiro 25,275 pointers and 20,192 arrays; Elden Ring 111,486 and 91,351, all by their own format); the records of a
+  PTCH section ascend by type, one a type, and the offsets of a record ascend strictly (Sekiro 302,601 records over
+  2,874,911 offsets; Elden Ring 1,114,489 over 7,516,964).
+- `Cloth::target_platform` reads `hclClothData.targetPlatform`, 2 in all 610 + 2,692 of the distinct tagfiles. Breaking:
+  `Cloth` has a new public field.
+
 ## 0.6.0 (2026-10-27)
 
 Bounding-volume trees. `compressed_mesh` decodes and checks both levels of a mesh's static tree and its simd tree, and
