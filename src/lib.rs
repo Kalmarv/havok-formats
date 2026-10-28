@@ -98,6 +98,8 @@ pub mod convex;
 mod extern_mesh;
 mod mesh;
 pub mod navmesh;
+
+pub mod mopp;
 pub mod packfile;
 mod polygon;
 mod section;
@@ -114,8 +116,8 @@ pub use bvtree::{
 };
 pub use extern_mesh::{ExternMesh, extern_mesh};
 pub use mesh::{
-    CompressedMesh, CustomKind, CustomPrimitive, MeshSection, ShapeInstance, Triangle, compressed_mesh,
-    extern_shapes, mesh_sections,
+    CompressedMesh, CustomKind, CustomPrimitive, MeshSection, PointSet, ShapeInstance, Triangle,
+    compressed_mesh, extern_shapes, mesh_sections,
 };
 mod tagfile;
 mod tagfile_write;

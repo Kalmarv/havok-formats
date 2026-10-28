@@ -7,7 +7,7 @@
 )]
 mod tagbuilder;
 
-use havok_formats::{SimdLane, Tagfile, compressed_mesh, mesh_sections, mesh_trees, simd_tree};
+use havok_formats::{CustomKind, SimdLane, Tagfile, compressed_mesh, mesh_sections, mesh_trees, simd_tree};
 use tagbuilder::{Built, Definition, Layout, fixed, primitive, record, tagfile};
 
 const SEKIRO: &[u8; 8] = b"20160200";
@@ -832,6 +832,108 @@ fn simd_trees_that_do_not_hold_together_are_refused() -> Built<()> {
                 "{e}"
             );
         }
+    }
+    Ok(())
+}
+
+/// A point-set code: `x` in the low 11 bits, `y` in the next 11, `z` in the top 10.
+const fn point_code(x: u64, y: u64, z: u64) -> u64 {
+    x | (y << 11) | (z << 22)
+}
+
+/// A fixture of one section whose one primitive is a custom primitive `[0, 0, 3, 0]` with the record `entries` (header,
+/// slot, tag) in the shared-vertex index, and `shared` shared vertices holding the point codes.
+fn point_set_fixture(
+    sdk: &[u8; 8],
+    entries: &[u32],
+    shared: &[(usize, u64)],
+    shared_len: usize,
+) -> Built<Vec<u8>> {
+    let sections = [Section {
+        first_packed: 0,
+        packed: 0,
+        first_shared: 0,
+        shared_indices: 3,
+        first_primitive: 0,
+        primitives: 1,
+        page: 0,
+    }];
+    mesh_fixture(
+        sdk,
+        STORED,
+        &Tree {
+            sections: &sections,
+            primitives: &[[0, 0, 3, 0]],
+            entries,
+            packed: &[],
+            shared_len,
+            shared,
+            mesh_nodes: &chain(5, 1),
+            section_nodes: &[chain(4, 1)],
+            leaf_indices: &[0],
+            simd: &[
+                [Lane::Empty; 4],
+                [Lane::Leaf(0, FIRST_BOX), Lane::Empty, Lane::Empty, Lane::Empty],
+            ],
+            has_simd_tree: 1,
+        },
+    )
+}
+
+/// A custom primitive with a `0x52` record decodes to the points of its record: 11/11/10-bit codes, two to a shared
+/// vertex (the even point in the high half), over the box of its leaf in the section's tree (here the section's domain,
+/// as the tree's nibbles are zero).
+#[test]
+fn a_point_set_decodes_over_its_leaf_box() -> Built<()> {
+    for sdk in [SEKIRO, ELDEN_RING] {
+        let first = (point_code(0, 0, 0) << 32) | point_code(2047, 2047, 1023);
+        let second = point_code(1024, 512, 256) << 32;
+        // header: three points, record type 2 with 32-bit codes and one tag word
+        let bytes = point_set_fixture(sdk, &[0x0352, 0, 0x3d4d], &[(0, first), (1, second)], 2)?;
+        let tag = Tagfile::read(&bytes, None).unwrap();
+        let mesh = compressed_mesh(tag.root().unwrap()).unwrap();
+        assert!(mesh.triangles.is_empty(), "{sdk:?}");
+        assert_eq!(mesh.custom.len(), 1, "{sdk:?}");
+        let custom = &mesh.custom[0];
+        assert_eq!(custom.kind, CustomKind::Unread, "{sdk:?}");
+        let points = custom.points.as_ref().unwrap();
+        assert_eq!(points.tag, 0x3d4d, "{sdk:?}");
+        // the leaf box is the fixture's domain, which starts at the origin
+        let scale = [
+            (2_097_151.0f64 / 2047.0) as f32,
+            (2_097_151.0f64 / 2047.0) as f32,
+            (4_194_303.0f64 / 1023.0) as f32,
+        ];
+        let want = |c: [u32; 3]| {
+            [
+                c[0] as f32 * scale[0],
+                c[1] as f32 * scale[1],
+                c[2] as f32 * scale[2],
+            ]
+        };
+        assert_eq!(
+            points.vertices,
+            [want([0, 0, 0]), want([2047, 2047, 1023]), want([1024, 512, 256])],
+            "{sdk:?}"
+        );
+    }
+    Ok(())
+}
+
+/// A record with no points, or whose points run past the shared vertices, is refused.
+#[test]
+fn a_point_set_that_cannot_be_read_is_refused() -> Built<()> {
+    for sdk in [SEKIRO, ELDEN_RING] {
+        let code = point_code(1, 2, 3) << 32;
+        let bytes = point_set_fixture(sdk, &[0x0052, 0, 0x3d4d], &[(0, code)], 1)?;
+        let tag = Tagfile::read(&bytes, None).unwrap();
+        let e = compressed_mesh(tag.root().unwrap()).unwrap_err().to_string();
+        assert!(e.contains("a point set without points"), "{sdk:?}: {e}");
+        // two points from slot 5 of one shared vertex
+        let bytes = point_set_fixture(sdk, &[0x0252, 5, 0x3d4d], &[(0, code)], 1)?;
+        let tag = Tagfile::read(&bytes, None).unwrap();
+        let e = compressed_mesh(tag.root().unwrap()).unwrap_err().to_string();
+        assert!(e.contains("out of bounds"), "{sdk:?}: {e}");
     }
     Ok(())
 }

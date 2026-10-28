@@ -28,7 +28,7 @@ pub struct CompressedMesh {
 /// A custom primitive of a mesh tree: one whose second and fourth indices are equal (`[k, x, n, x]`; no triangle or
 /// quad in the Sekiro or Elden Ring collision read has them equal). Instead of vertices, `k` names where its data starts in the
 /// shared-vertex index (counting the section's packed vertices first, as a vertex index does).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CustomPrimitive {
     /// Right-aligned shape key: section and primitive, quad half zero.
     pub key: u32,
@@ -36,6 +36,22 @@ pub struct CustomPrimitive {
     pub indices: [usize; 4],
     /// What the data is.
     pub kind: CustomKind,
+    /// The decoded points of a primitive whose first word has the low byte 0x52 ([`CustomKind::Unread`]); `None` for
+    /// the others.
+    pub points: Option<PointSet>,
+}
+
+/// The point set of a custom primitive whose record starts `[header, slot, tag]` with the low byte of `header` 0x52: the
+/// header's high byte is the number of points, `slot` the first shared vertex that holds them, `tag` a word whose meaning
+/// is not known. The points are 11/11/10-bit codes, two to a shared vertex (the even point in its high 32 bits), over the
+/// box of the primitive's leaf in the section's tree. They are the corners of a convex solid (cylinders, boxes and
+/// prisms in the Sekiro and Elden Ring objects and assets that have them); the stored data does not say it is a hull.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointSet {
+    /// The points, in the order stored (shape-local coordinates, like a triangle's).
+    pub vertices: Vec<[f32; 3]>,
+    /// The record's third word: `0x3C24` in every Elden Ring record, `0x3D4D`, `0x3C9D`, `0x3CC7` or `0x3C8B` in Sekiro's.
+    pub tag: u32,
 }
 
 /// What a custom primitive's data is, by its first word.
@@ -44,8 +60,10 @@ pub enum CustomKind {
     /// `[146, w, index low, index high]` with indices `[k, k, 4, k]`: the extern shape at `index` of the shape's
     /// `externShapes` (the second word is not read). Elden Ring's asset collision.
     Extern(usize),
-    /// Records whose first word's low byte is 0x52 (`[0x2252, 8, 0x3d4d]`: a word, what may be a vertex index and what
-    /// may be a half float; in both games'): their meaning is not known, so they are not read.
+    /// Records whose first word's low byte is 0x52 (`[0x2252, 8, 0x3d4d]`: the point count in the high byte, the first
+    /// shared vertex of the points and a tag; in both games): a convex point set, decoded into
+    /// [`CustomPrimitive::points`]. The variant keeps the name it had when the records were not read, so that readers
+    /// that tell them from extern shape references by it still do: no reader acts on the points yet.
     Unread,
 }
 
@@ -65,6 +83,81 @@ const PAGE_SIZE: usize = 1 << 16;
 
 /// The first word of a custom primitive that references an extern shape.
 const EXTERN_SHAPE_TAG: u32 = 146;
+
+/// The low byte of the first word of a point-set record: the record type 2 in the low nibble, 32-bit point codes in
+/// bits 4 to 5 and one tag word in bits 6 to 7.
+const POINT_SET_HEADER: u32 = 0x52;
+
+/// The 11/11/10-bit code range of a point on each axis.
+const POINT_CODES: [f64; 3] = [2047.0, 2047.0, 1023.0];
+
+/// A value narrowed to the `f32` the file's codecs compute in.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the codecs decode in f32, so the box is rounded to it"
+)]
+fn narrow(x: f64) -> f32 {
+    x as f32
+}
+
+/// Decode the point set of the record `[header, slot, tag]` of a custom primitive in a section of page `page`, from the
+/// shared vertices `shared`, under the box `leaf` of the primitive's leaf in the section's tree. Refused: a record with
+/// no points, or whose points run past the shared vertices.
+fn point_set(
+    at: usize,
+    header: u32,
+    slot: u32,
+    tag: u32,
+    page: usize,
+    shared: crate::Array<'_, '_>,
+    leaf: &[[f64; 3]; 2],
+) -> Result<PointSet> {
+    let count =
+        usize::try_from((header >> 8) & 0xff).map_err(|_| invalid(at, "point count exceeds usize"))?;
+    if count == 0 {
+        return Err(invalid(at, "a point set without points"));
+    }
+    let first = usize::try_from(slot)
+        .ok()
+        .and_then(|slot| {
+            page.checked_mul(PAGE_SIZE)
+                .and_then(|base| base.checked_add(slot))
+        })
+        .ok_or_else(|| invalid(at, "point set slot overflow"))?;
+    let [low, high] = *leaf;
+    let mut scale = [0.0f32; 3];
+    let mut offset = [0.0f32; 3];
+    for axis in 0..3 {
+        let (min, max, codes) = (
+            low.get(axis).copied().unwrap_or(0.0),
+            high.get(axis).copied().unwrap_or(0.0),
+            POINT_CODES.get(axis).copied().unwrap_or(1.0),
+        );
+        if let (Some(s), Some(o)) = (scale.get_mut(axis), offset.get_mut(axis)) {
+            *s = narrow((max - min) / codes);
+            *o = narrow(min);
+        }
+    }
+    let mut vertices = Vec::with_capacity(count);
+    for point in 0..count {
+        let entry = first
+            .checked_add(point >> 1)
+            .ok_or_else(|| invalid(at, "point set slot overflow"))?;
+        let stored = shared.get(entry)?.unsigned()?;
+        // two codes to a shared vertex, the even point in the high half
+        let code = if point & 1 == 0 {
+            stored >> 32
+        } else {
+            stored & 0xffff_ffff
+        };
+        let code = u32::try_from(code).map_err(|_| invalid(at, "a point code wider than 32 bits"))?;
+        vertices.push(
+            primase_foundations::vertex::packed_position32(code, scale, offset)
+                .map_err(|e| invalid(at, e.to_string()))?,
+        );
+    }
+    Ok(PointSet { vertices, tag })
+}
 
 /// The extern shape instances of an hknpCompressedMeshShape (`externShapes`), each with its transform; each one is
 /// referenced by exactly one of its mesh's extern custom primitives, and they reference no other. A class without the
@@ -350,7 +443,8 @@ pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
 /// transforms belong to the caller. Packed section vertices are 11/11/10 bits;
 /// shared vertices are 21/21/22 bits over the declared domain, and a section's shared-vertex index entries address
 /// them from its [`MeshSection::page`] times 65,536 on. Custom primitives
-/// are listed ([`CustomPrimitive`]), not decoded.
+/// are listed ([`CustomPrimitive`]); the point set of one is decoded ([`PointSet`]), an extern shape reference is not
+/// followed (see [`extern_shapes`]).
 ///
 /// The tree must store its vertex arrays in the one configuration the Sekiro and Elden Ring collision uses (4-byte
 /// `packedVertices`, 8-byte `sharedVertices`, 16-bit `sharedVerticesIndex`): another width is refused.
@@ -475,7 +569,8 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
                     u32::try_from(shared_indices.get(at)?.unsigned()?)
                         .map_err(|_| invalid(section.at(), "custom primitive word exceeds u32"))
                 };
-                let kind = match word(0)? {
+                let header = word(0)?;
+                let kind = match header {
                     EXTERN_SHAPE_TAG if ix == [k, k, 4, k] => {
                         let (low, high) = (word(2)?, word(3)?);
                         if low > 0xffff || high > 0xffff {
@@ -483,7 +578,9 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
                         }
                         CustomKind::Extern((low | (high << 16)) as usize)
                     }
-                    first if first != EXTERN_SHAPE_TAG && first & 0xff == 0x52 => CustomKind::Unread,
+                    first if first != EXTERN_SHAPE_TAG && first & 0xff == POINT_SET_HEADER => {
+                        CustomKind::Unread
+                    }
                     first => {
                         return Err(invalid(
                             section.at(),
@@ -491,10 +588,32 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
                         ));
                     }
                 };
+                let points = if kind == CustomKind::Unread {
+                    // the points are coded over the box of the primitive's own leaf in the section's tree
+                    let leaf = trees
+                        .sections
+                        .get(section_index)
+                        .and_then(|tree| tree.leaf(i))
+                        .ok_or_else(|| {
+                            invalid(section.at(), "a point set without a leaf in its section's tree")
+                        })?;
+                    Some(point_set(
+                        section.at(),
+                        header,
+                        word(1)?,
+                        word(2)?,
+                        page,
+                        shared,
+                        &leaf.aabb,
+                    )?)
+                } else {
+                    None
+                };
                 result.custom.push(CustomPrimitive {
                     key,
                     indices: ix,
                     kind,
+                    points,
                 });
                 live.push(LivePrimitive { key, vertices: None });
                 continue;
