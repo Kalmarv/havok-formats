@@ -384,3 +384,155 @@ fn patch_records_ascend_by_type_and_by_offset() {
         assert!(error.detail.contains(want), "{want}: {error}");
     }
 }
+
+/// The fixture's items after a write: type, kind byte and count of each, and where DATA holds them.
+fn written_items(bytes: &[u8]) -> Vec<(usize, u8, usize, usize)> {
+    let tag = Tagfile::read(bytes, None).expect("written fixture");
+    tag.items
+        .iter()
+        .skip(1)
+        .map(|i| {
+            let kind = match i.kind {
+                havok_formats::ItemKind::Object => 0x10,
+                _ => 0x20,
+            };
+            (i.type_index, kind, i.offset, i.count)
+        })
+        .collect()
+}
+#[test]
+fn a_tagfile_is_written_in_the_layout_the_game_files_have() {
+    let bytes = fixture();
+    let tag = Tagfile::read(&bytes, None).expect("fixture");
+    let written = tag.image().expect("image").write().expect("write");
+    // the fixture is not laid out as the game's files are (its DATA is not a multiple of 16 long), so the comparison of
+    // a file with what is written from it can fail
+    assert_ne!(written, bytes);
+    // the root at 0; the run an array slot refers to on a multiple of 16; the object a pointer refers to after it,
+    // on its type's alignment; DATA a multiple of 16 long
+    assert_eq!(
+        written_items(&written),
+        [(1, 0x10, 0, 1), (2, 0x10, 48, 1), (3, 0x20, 32, 2)]
+    );
+    let back = Tagfile::read(&written, None).expect("read back");
+    // one patch record a slot type, ascending: the three pointer slots (the root's and the array's two) and the array
+    assert_eq!(back.patches, vec![(3, vec![8, 32, 40]), (4, vec![16])]);
+    let root = back.root().expect("root");
+    assert_eq!(root.field("value").expect("value").unsigned().expect("uint"), 17);
+    assert_eq!(
+        root.field("pointer")
+            .expect("pointer")
+            .dereference()
+            .expect("target")
+            .unsigned()
+            .expect("uint"),
+        91
+    );
+    assert_eq!(
+        root.field("array")
+            .expect("array")
+            .array()
+            .expect("array view")
+            .len(),
+        2
+    );
+    // what is written reads and writes again as itself
+    assert_eq!(back.image().expect("image").write().expect("write"), written);
+}
+#[test]
+fn an_edited_value_is_written_and_read_back_with_everything_else_unchanged() {
+    let bytes = fixture();
+    let tag = Tagfile::read(&bytes, None).expect("fixture");
+    let (item, within) = tag
+        .item_at(tag.root().expect("root").field("value").expect("value").offset)
+        .expect("the value is in an item");
+    assert_eq!((item, within), (1, 0));
+    let mut image = tag.image().expect("image");
+    let before = image.write().expect("write");
+    image.items[item].data[within] = 18;
+    let after = image.write().expect("write");
+    let differing: Vec<usize> = (0..before.len()).filter(|&i| before[i] != after[i]).collect();
+    assert_eq!(before.len(), after.len());
+    assert_eq!(differing.len(), 1, "one byte differs");
+    let back = Tagfile::read(&after, None).expect("read back");
+    assert_eq!(
+        back.root()
+            .expect("root")
+            .field("value")
+            .expect("value")
+            .unsigned()
+            .expect("uint"),
+        18
+    );
+}
+#[test]
+fn a_reference_can_be_pointed_at_a_new_item_and_the_items_are_renumbered() {
+    let tag_bytes = fixture();
+    let tag = Tagfile::read(&tag_bytes, None).expect("fixture");
+    let mut image = tag.image().expect("image");
+    let new = image.push_item(havok_formats::ImageItem {
+        type_index: 2,
+        kind: havok_formats::ItemKind::Object,
+        count: 1,
+        data: 5u32.to_le_bytes().to_vec(),
+    });
+    // an item nothing refers to is not written
+    let unused = image.push_item(havok_formats::ImageItem {
+        type_index: 2,
+        kind: havok_formats::ItemKind::Object,
+        count: 1,
+        data: 9u32.to_le_bytes().to_vec(),
+    });
+    assert_eq!((new, unused), (4, 5));
+    image.set_reference(1, 8, new).expect("the root's pointer slot");
+    let written = image.write().expect("write");
+    let back = Tagfile::read(&written, None).expect("read back");
+    // root, the new object (found first: the pointer comes before the array), the array's run, the old object
+    assert_eq!(back.items.len(), 5);
+    assert_eq!(
+        written_items(&written),
+        [
+            (1, 0x10, 0, 1),
+            (2, 0x10, 48, 1),
+            (3, 0x20, 32, 2),
+            (2, 0x10, 52, 1)
+        ]
+    );
+    let root = back.root().expect("root");
+    let pointed =
+        |v: havok_formats::Value<'_, '_>| v.dereference().expect("target").unsigned().expect("uint");
+    assert_eq!(pointed(root.field("pointer").expect("pointer")), 5);
+    let array = root.field("array").expect("array").array().expect("array view");
+    assert_eq!(pointed(array.get(0).expect("first")), 91);
+    assert_eq!(pointed(array.get(1).expect("second")), 91);
+    // slots are not set past the item's data, or where there is none
+    assert!(image.set_reference(1, 0, 2).is_err());
+    assert!(image.set_reference(1, 400, 2).is_err());
+    assert!(image.set_reference(9, 8, 2).is_err());
+    assert!(image.set_string(1, 8, "x").is_err(), "a pointer is not a string");
+}
+#[test]
+fn an_image_that_does_not_hold_together_is_refused_on_write() {
+    let bytes = fixture();
+    let tag = Tagfile::read(&bytes, None).expect("fixture");
+    let image = tag.image().expect("image");
+    let refused = |image: &havok_formats::TagfileImage, why: &str| {
+        let e = image.write().expect_err(why).to_string();
+        assert!(e.contains(why), "{e}");
+    };
+    let mut short = image.clone();
+    short.items[1].data.pop();
+    refused(&short, "bytes for");
+    let mut wide = image.clone();
+    wide.items[1].data[12] = 1;
+    refused(&wide, "not zero");
+    let mut far = image.clone();
+    far.set_reference(1, 8, 99).expect("set");
+    refused(&far, "refers to item 99");
+    let mut run = image.clone();
+    run.items[1].kind = havok_formats::ItemKind::Run;
+    refused(&run, "not a single object");
+    let mut null = image.clone();
+    null.items.truncate(1);
+    refused(&null, "no root");
+}

@@ -7,7 +7,8 @@
 //!
 //! - **Tagfiles** (`TAG0`, SDK versions 2015.1, 2016.2 and 2018.1, see [`SDK_VERSIONS`]) and their external type compendia
 //!   (`TCM0`): [`Tagfile`] and [`Compendium`]. Class layouts come from the file's own type metadata, so any class
-//!   can be read field by field through [`Value`] and [`Array`].
+//!   can be read field by field through [`Value`] and [`Array`]. [`Tagfile::image`] makes an editable [`TagfileImage`],
+//!   which writes a tagfile again.
 //! - **Packfiles** (version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian): [`packfile`].
 //! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`], with their bounding-volume trees
 //!   [`mesh_trees`] and [`simd_tree`]), extern triangle meshes ([`extern_mesh`]),
@@ -25,8 +26,9 @@
 //! versions and flags are refused rather than skipped. Type indices are one-based; zero denotes a null type or object
 //! reference.
 //!
-//! It does not validate every byte of a file, only what the accessors you call read, and it does not write Havok data
-//! or simulate anything.
+//! It does not validate every byte of a file, only what the accessors you call read. It writes tagfiles
+//! ([`Tagfile::image`] and [`TagfileImage::write`]: an unedited file comes back byte for byte, an edited one with its
+//! items numbered and laid out as the game's files are) but not packfiles, and it does not simulate anything.
 //!
 //! # Example
 //!
@@ -101,9 +103,11 @@ pub use mesh::{
     extern_shapes, mesh_sections,
 };
 mod tagfile;
+mod tagfile_write;
 mod types;
 mod value;
 pub use tagfile::{Item, ItemKind, SDK_VERSIONS, Tagfile};
+pub use tagfile_write::{ImageItem, TagfileImage};
 pub use types::{Compendium, Field, Type, TypeFlags};
 pub use value::{Array, Value};
 

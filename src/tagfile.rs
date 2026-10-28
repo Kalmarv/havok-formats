@@ -55,6 +55,8 @@ pub struct Tagfile<'a> {
     /// file has no PTCH section.
     pub patches: Vec<(usize, Vec<usize>)>,
     data: &'a [u8],
+    /// The type table's section as stored, its header included (`TYPE`, or the `TCRF` reference to a compendium).
+    type_section: &'a [u8],
     /// The file offset of DATA's first byte.
     data_offset: usize,
     /// The file offset of the item table (`ITEM`), where an item index is looked up.
@@ -204,6 +206,9 @@ impl<'a> Tagfile<'a> {
             items,
             patches,
             data: data.payload,
+            type_section: bytes
+                .get(ts.offset..ts.offset.saturating_add(8).saturating_add(ts.payload.len()))
+                .unwrap_or_default(),
             data_offset: data.offset.saturating_add(8),
             items_offset: table.offset,
             types_offset: ts.offset,
@@ -219,6 +224,22 @@ impl<'a> Tagfile<'a> {
             result.bytes(item.offset, size)?;
         }
         Ok(result)
+    }
+    /// The type table's section as the file stores it, header included: `TYPE` (the file's own types), or `TCRF`
+    /// (the id of the compendium that holds them).
+    pub(crate) fn type_section(&self) -> &'a [u8] {
+        self.type_section
+    }
+    /// The item that holds the DATA byte at `offset`, and the byte's position in it; `None` between items.
+    /// A linear scan of the item table.
+    pub fn item_at(&self, offset: usize) -> Option<(usize, usize)> {
+        self.items.iter().enumerate().skip(1).find_map(|(i, item)| {
+            let stride = self.stride(item.type_index).ok()?;
+            let end = item.offset.checked_add(stride.checked_mul(item.count)?)?;
+            (item.offset..end)
+                .contains(&offset)
+                .then(|| (i, offset.saturating_sub(item.offset)))
+        })
     }
     /// The first value `f` finds on type `index` or the types it derives from; the default (0) at the null type.
     pub fn inherited<T: Default>(&self, mut index: usize, f: impl Fn(&Type) -> Option<T>) -> Result<T> {

@@ -52,6 +52,18 @@ Tagfiles (`Tagfile`, `Type`, `cloth`):
 - `Cloth::target_platform` reads `hclClothData.targetPlatform`, 2 in all 610 + 2,692 of the distinct tagfiles. Breaking:
   `Cloth` has a new public field.
 
+Tagfile writer (`Tagfile::image`, `TagfileImage`, `ImageItem`):
+
+- `Tagfile::image` copies a tagfile into an editable `TagfileImage` (its type table as stored, and every item's bytes);
+  `TagfileImage::write` emits a tagfile: the type section (`TYPE`, or the `TCRF` reference to a compendium) is written as
+  it was read, and `DATA`, `ITEM` and `PTCH` are made from the item graph. The items are numbered and laid out by the
+  rules the stock files follow (breadth first over runs, a queue of objects, strings numbered last; arrays on 16, strings
+  on 2, objects on their alignment; the module documentation has them). A file read and written again, unedited, is the
+  same bytes: all 19,137 distinct tagfiles of Sekiro (15,176 with a compendium, 3,960 with their own types, the one of SDK
+  2015.1) and all 68,722 of Elden Ring (46,793 and 21,929). Editing is by `ImageItem::data`, `TagfileImage::set_reference`,
+  `set_string` and `push_item`; items nothing refers to are not written.
+- `Tagfile::item_at` finds the item and the position in it of a DATA offset (a `Value`'s `offset`).
+
 ## 0.6.0 (2026-10-27)
 
 Bounding-volume trees. `compressed_mesh` decodes and checks both levels of a mesh's static tree and its simd tree, and
