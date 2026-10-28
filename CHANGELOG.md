@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-27)
 
 The checks and members a census of the 490 Tony Hawk's SHRED packfiles and of every Sekiro and Elden Ring tagfile
 settled. Each new refusal is of an input none of those files has: a read of the 490 packfiles (1,470 sections) refuses
