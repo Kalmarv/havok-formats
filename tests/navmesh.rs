@@ -6,7 +6,7 @@
 //! tagfiles (faces, edges, user edges, vertices, clustered faces, graph nodes and edges, tree nodes, user-edge setups,
 //! data words) and, for the triangles, with a triangulator whose output the census checked face by face (no triangle
 //! turns against its face, the projected areas add up). The census read all 1,509 Sekiro and 7,438 Elden Ring
-//! navmesh tagfiles of both installs; tests/navmesh.rs reads the twelve. The files were picked as the smallest and the
+//! navmesh tagfiles of both installs; this test reads twelve of them. The files were picked as the smallest and the
 //! largest of each combination of objects, an empty mesh of each, the largest with user-edge setups and the one with a
 //! face that ear clipping cannot finish.
 mod inputs;
