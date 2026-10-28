@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 (2026-10-28)
 
 Spline compression written as well as read: the stored block values kept exactly, an encoder, and an animation written
 into its file.
