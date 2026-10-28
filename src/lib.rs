@@ -15,8 +15,8 @@
 //! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`], with their bounding-volume trees
 //!   [`mesh_trees`] and [`simd_tree`]), extern triangle meshes ([`extern_mesh`]),
 //!   convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, animation bindings and spline
-//!   compressed animation ([`animation`], [`spline`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles
-//!   ([`packfile::physics`]).
+//!   compressed animation ([`animation`], [`spline`]), navigation meshes, their cluster graphs and query trees
+//!   ([`navmesh`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles ([`packfile::physics`]).
 //!
 //! It was written against Sekiro (tagfiles, 2016.2; packfiles, versions 9 and 11), Elden Ring (tagfiles, 2018.1;
 //! packfiles, versions 9 and 11) and Tony Hawk's SHRED for PS3 (packfiles, version 7).
@@ -92,7 +92,9 @@ pub mod cloth;
 pub mod convex;
 mod extern_mesh;
 mod mesh;
+pub mod navmesh;
 pub mod packfile;
+mod polygon;
 mod section;
 mod simdtree;
 pub mod spline;

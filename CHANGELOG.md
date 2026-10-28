@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+Navigation: `navmesh` reads the Havok AI objects of the games' navmesh binders (`*.nvmhktbnd.dcx`), checked on the 1,509
+Sekiro and 7,438 Elden Ring tagfiles of both installs.
+
+- `navmesh::nav_data` reads a navmesh tagfile's root into `NavData`: the `NavMesh`, Sekiro's `NavGraph`, Elden Ring's
+  `NavTree` and the `UserEdgeSetup`s. `NavMesh` (`from_parts`, `read`, `corners`, `face_words`, `edge_words`,
+  `triangulate`), `NavFace`, `NavEdge`, `NavLink`, `NavAabb`, `FaceTriangles`, `RawNavMesh`; `NavGraph` (`from_parts`,
+  `read`), `NavGraphNode`, `NavGraphEdge`, `RawNavGraph`; `NavTree` (`decode`, `read`, `covers_faces_once`,
+  `corner_excess`), `NavTreeNode`, `NavTreeKind`, `RawNavTreeNode`; `UserEdgeSetup`, `UserEdgeBox`;
+  `NavData::graph_is_cluster_graph`.
+- The reader refuses what the files never hold: streaming sets, a face that is not a ring of 3 or more edges, an edge in
+  two faces or none, an opposite edge that does not point back or whose face is not its owner, a graph that does not tile
+  its edges, a tree that is not a pre-order tree with every face once. Faces are triangulated by ear clipping in their own
+  plane (about 5 % of Sekiro's and 2 % of Elden Ring's faces are not convex, so a fan is wrong for them).
+- The Sekiro graph is the cluster graph of its mesh (one node per `clusterIndex`, an edge for every pair of clusters
+  that share an edge, both ways: 1,509 of 1,509 files); Elden Ring has no graph, no clusters, and user edges.
+
 ## 0.8.1 (2026-10-28)
 
 Spline compression written as well as read: the stored block values kept exactly, an encoder, and an animation written

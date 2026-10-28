@@ -86,6 +86,18 @@ primase_testdata::inputs! {
             about: r#"the 6 distinct packfiles of the install (3 of version 11 and 3 of version 9, all face animation), loose and named by their sha256; tests/packfile_image.rs reads, images and writes each of them back byte for byte"#,
             source: r#"the game's own files from the user's install, found as for Sekiro"#,
         },
+        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-nav") => {
+            status: Live,
+            gate: false,
+            about: r#"five navmesh tagfiles of the install (`hkaiNavMesh` with an `hkaiDirectedGraphExplicitCost`, Sekiro's 2016.2 files), loose, each carrying its own type table, and `manifest.tsv` with the counts of each (faces, edges, user edges, vertices, clustered faces, triangles, graph nodes and edges, user-edge setups, data words): the smallest and the largest with a graph, an empty one, the smallest and the largest with user-edge setups; tests/navmesh.rs reads them"#,
+            source: r#"the game's own files from the user's install: members of the `m10`, `m17`, `m20` and `m25` `nvmhktbnd` binders, out of their DCX envelopes as stored, picked by reading all 1,509 navmesh tagfiles of the 10 binders"#,
+        },
+        Query::Oracle(OracleSet::Corpus, Game::Elden, "havok-nav") => {
+            status: Live,
+            gate: false,
+            about: r#"seven navmesh tagfiles of the install (`hkaiNavMesh` beside an `hkaiStaticTreeNavMeshQueryMediator` and, in two, an `hkaiUserEdgeSetupArray`, Elden Ring's 2018.1 files), loose, each carrying its own type table, and `manifest.tsv` with the counts of each: an empty mesh, the smallest and the largest with a tree, an empty tree, the smallest and the largest with user edges, and the one with a face that ear clipping cannot finish; tests/navmesh.rs reads them"#,
+            source: r#"the game's own files from the user's install: members of the `nvmhktbnd` binders of `m10`, `m12`, `m13`, `m34`, `m60_47_38` and `m60_49_37`, out of their DCX envelopes as stored, picked by reading all 7,438 navmesh tagfiles of the 695 binders"#,
+        },
     }
     debug {}
 }
