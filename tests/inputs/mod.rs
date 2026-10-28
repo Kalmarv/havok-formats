@@ -43,6 +43,18 @@ primase_testdata::inputs! {
             about: r#"the one Sekiro tagfile whose mesh trees have sections of page above 0 (89 sections; the low-resolution map collision `l10_00_00_00`, member `_000001`) and the compendium it shares, loose; tests/paged_mesh.rs decodes every mesh of it"#,
             source: r#"the game's own files from the user's install: the members of the `l10_00_00_00.hkxbhd`/`.hkxbdt` binder out of their DCX envelopes, picked by reading every map `l` binder of the install for sections of page above 0"#,
         },
+        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-cloth") => {
+            status: Live,
+            gate: false,
+            about: r#"every distinct tagfile with cloth (`hclClothData` in its type table) of the install: 149 files, loose, and `manifest.tsv` (sha256, file, compendium, binder, member) naming each of the 167 binder members they were found in; tests/cloth_corpus.rs reads them all"#,
+            source: r#"the game's own files from the user's install: every archive entry walked (named or not, nested BND4 and DCX opened), each TAG0 member whose type table has `hclClothData` taken out of its DCX envelope and deduplicated by sha256 (95 `chrbnd`, 36 `objbnd`, 36 `partsbnd` members)"#,
+        },
+        Query::Oracle(OracleSet::Corpus, Game::Elden, "havok-cloth") => {
+            status: Live,
+            gate: false,
+            about: r#"every distinct tagfile with cloth of the install: 814 files, loose, and `manifest.tsv` naming each of the 1,605 binder members they were found in; tests/cloth_corpus.rs reads them all"#,
+            source: r#"the game's own files from the user's install, found as for Sekiro (182 `chrbnd`, 1,418 `partsbnd`, 5 `geombnd` members)"#,
+        },
         Query::Oracle(OracleSet::Corpus, Game::Elden, "havok-float") => {
             status: Live,
             gate: false,

@@ -8,7 +8,7 @@ A Rust library that reads Havok physics and animation data as games store it: ta
 - **Packfiles** (the older `0x57E0E057 0x10C0C010` container), version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian.
 - **Objects**, read by class from those files:
   - `hknp` compressed meshes (triangles, dead primitives, custom primitives, extern shape instances, and the bounding-volume trees of the mesh, of each section and the four-lane simd tree, decoded and checked as they are read), extern triangle meshes (`hknpExternMeshShape` over `hkGeometry`) and convex shapes;
-  - cloth (`hclClothData` with its sim cloths, rest poses and link, bend-link, compressible-link and local-range constraint sets), ragdoll data and constraint descriptions;
+  - cloth (the whole `hclClothData`: sim cloths with their particles, rest poses, constraint sets of every kind the games use, collidables and shapes, and the buffers, transform sets, operators and states around them), ragdoll data and constraint descriptions;
   - skeletons, animation bindings and animation containers, and `hkaSplineCompressedAnimation` decoded to bone transforms at a time;
   - 7.1 `hkp` rigid bodies and collision shapes in packfiles (rigid body, MOPP tree, storage extended mesh, convex vertices, box, sphere, capsule, cylinder, convex translate, list).
 

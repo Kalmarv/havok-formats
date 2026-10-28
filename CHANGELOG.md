@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Cloth (`cloth`) reads the whole `hclClothData`: what a cloth runtime needs, checked on every distinct tagfile with cloth
+of both installs (149 Sekiro, 814 Elden Ring), none refused (`tests/cloth_corpus.rs` asserts the counts; a generic
+census of every `hcl` object of the same files finds the same object counts).
+
+- `Cloth` adds `buffers` (`BufferDefinition` with its `BufferLayout`; scratch and shadow buffers by `BufferKind`),
+  `transform_sets`, `operators`, `states` (`ClothState` with buffer and transform set usage and its `DependencyGraph`),
+  `state_transitions` and `actions` (by class).
+- `SimCloth` reads all 29 members: simulation info (`gravity`, `global_damping_per_second`), `do_normals`,
+  `sim_op_ids`, anti-pinch sets, `collidable_transform_map`, `collidables` (`Collidable` with its `Shape`: sphere,
+  capsule, tapered capsule, plane, convex geometry), collision masks, transfer motion, landscape collision, the
+  triangles (`triangle_indices`, `triangle_flips`), pinch data and `virtual_collision_points`.
+- `ConstraintSet` is a struct (`name`, `constraint_id`: Elden Ring only, `kind`); `ConstraintKind` has a variant per
+  class: standard, stretch, compressible and bend links, bend stiffness, local range, transition and `VolumeMx`.
+- `Operator` (`name`, `id`, `operator_type`, buffer and transform set usage, `kind`): `OperatorKind` reads simulate (its
+  configs), move particles, object- and bone-space skinning and mesh-mesh deformation (P, PN, PNT: deformer blend blocks,
+  control bytes, packed and unpacked local blocks), simple and weighted mesh-bone deformation, vertex copies and gathers,
+  input and output conversion, and all and some vertex frame updates.
+- New checks: every particle index a sim cloth stores (its triangles, every constraint kind's particles, the virtual
+  collision points' particles, a move particles operator's particles) is below the sim cloth's particle count; every
+  index into the cloth data's buffers, transform sets, operators and sim cloths is below the list's length; a move
+  particles vertex, a local range or transition reference vertex, and a vertex copy's range are inside their buffer; a
+  sim cloth stores whole triangles; a collidable transform map has a bone and an offset for each collidable.
+- Breaking: `cloth::ConstraintSet` and `cloth::Link` changed shape (`Link` has no `compression_length` or `stretch`;
+  compressible and bend links are `CompressibleLink` and `BendLink`); `cloth.rs` became the `cloth` module directory.
+
 ## 0.7.0 (2026-10-27)
 
 The checks and members a census of the 490 Tony Hawk's SHRED packfiles and of every Sekiro and Elden Ring tagfile
