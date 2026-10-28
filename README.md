@@ -54,7 +54,7 @@ The same code is the compile-checked doc test of the crate documentation, and, t
 
 - It does not write Havok data, and it does not simulate: no physics, cloth solver or animation blending.
 - It is not a complete validator: it checks the values its accessors read, not every unused byte of a file.
-- Tagfiles of other SDK versions, packfiles other than `Havok-7.1.0-r1` with 4-byte big-endian pointers, big-endian or float-track spline animations, and Havok classes without a reader here are refused or left unread (`hkpMoppCode`, convex connectivity and constraint atoms are recognised by name and counted, not decoded).
+- Tagfiles of other SDK versions, packfiles other than `Havok-7.1.0-r1` with 4-byte big-endian pointers, big-endian spline animations and ones with more than one float track, and Havok classes without a reader here are refused or left unread (`hkpMoppCode`, convex connectivity and constraint atoms are recognised by name and counted, not decoded).
 - Material meanings and coordinate-system conversions are left to the caller: it returns what the file stores.
 
 ## Tests

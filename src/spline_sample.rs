@@ -11,7 +11,9 @@
 )]
 
 use crate::animation::{Binding, QsTransform, Skeleton};
-use crate::spline::{Absent, Component, Fallback, Knots, Rotation, SplineAnimation, Track, Vector};
+use crate::spline::{
+    Absent, Component, Fallback, FloatTrack, Knots, Rotation, SplineAnimation, Track, Vector,
+};
 use crate::{Result, invalid};
 
 impl SplineAnimation {
@@ -83,6 +85,56 @@ impl SplineAnimation {
         sample_track(t, frame, reference, absent)
     }
 
+    /// A float track at `time` seconds.
+    pub fn sample_float(&self, track: usize, time: f32) -> Result<f32> {
+        let (block, frame) = self.locate(time)?;
+        let t = self
+            .floats
+            .get(block)
+            .and_then(|b| b.get(track))
+            .ok_or_else(|| invalid(0, format!("no float track {track}")))?;
+        match t {
+            FloatTrack::Static(v) => Ok(*v),
+            FloatTrack::Spline { knots, points } => spline_value(knots, points, frame),
+        }
+    }
+
+    /// Every float slot of `skeleton` at `time` seconds: the slots a float track of `binding` drives sampled (a track
+    /// bound to a negative slot index drives none), the others at the skeleton's reference value. `binding` must be the
+    /// one that binds this animation to `skeleton`.
+    pub fn floats_at(&self, time: f32, binding: &Binding, skeleton: &Skeleton) -> Result<Vec<f32>> {
+        let tracks = self.floats.first().map_or(0, Vec::len);
+        if binding.float_track_to_slot.len() != tracks {
+            return Err(invalid(
+                0,
+                format!(
+                    "the binding has {} float tracks, the animation {tracks}",
+                    binding.float_track_to_slot.len()
+                ),
+            ));
+        }
+        let mut floats = skeleton.reference_floats.clone();
+        for (track, &slot) in binding.float_track_to_slot.iter().enumerate() {
+            // a negative slot index is a track that drives no slot
+            if slot < 0 {
+                continue;
+            }
+            let outside = || {
+                invalid(
+                    0,
+                    format!(
+                        "float track {track} drives slot {slot}, outside the skeleton's {} slots",
+                        skeleton.reference_floats.len()
+                    ),
+                )
+            };
+            let slot = usize::try_from(slot).map_err(|_| outside())?;
+            let value = self.sample_float(track, time)?;
+            *floats.get_mut(slot).ok_or_else(outside)? = value;
+        }
+        Ok(floats)
+    }
+
     /// Every bone of `skeleton` at `time` seconds: the bones a track of `binding` drives sampled (a track bound to a
     /// negative bone index drives none), the others at their reference transform. `binding` must be the one that binds this animation to `skeleton`.
     pub fn pose_at(
@@ -148,7 +200,10 @@ fn sample_track(t: &Track, frame: f32, reference: &QsTransform, absent: Absent) 
             Fallback::Reference => reference.rotation,
             Fallback::Neutral => [0.0, 0.0, 0.0, 1.0],
         },
-        Rotation::Static(q) => *q,
+        Rotation::Static(q) if q.iter().all(|v| v.is_finite()) => *q,
+        Rotation::Static(_) => {
+            return Err(invalid(0, "a static rotation is stored as non-finite floats"));
+        }
         Rotation::Spline { knots, points } => {
             let at = evaluate(knots, frame, points.len())?;
             let mut q = [0.0f64; 4];
@@ -161,7 +216,13 @@ fn sample_track(t: &Track, frame: f32, reference: &QsTransform, absent: Absent) 
                 }
             }
             let norm = q.iter().map(|v| v * v).sum::<f64>().sqrt();
-            if norm == 0.0 || !norm.is_finite() {
+            if !norm.is_finite() {
+                return Err(invalid(
+                    0,
+                    "a rotation spline blends a control point that is stored as non-finite floats",
+                ));
+            }
+            if norm == 0.0 {
                 return Err(invalid(0, "a rotation spline blends to no rotation"));
             }
             // rounded once to f32
@@ -253,23 +314,28 @@ fn evaluate(knots: &Knots, frame: f32, points: usize) -> Result<Vec<(usize, f64)
         .collect())
 }
 
+/// The value at `frame` of a spline of scalar control points.
+fn spline_value(knots: &Knots, points: &[f32], frame: f32) -> Result<f32> {
+    let mut sum = 0.0;
+    for (p, w) in evaluate(knots, frame, points.len())? {
+        let point = points
+            .get(p)
+            .ok_or_else(|| invalid(0, format!("control point {p} of {} is missing", points.len())))?;
+        sum += f64::from(*point) * w;
+    }
+    // rounded once to f32
+    #[allow(clippy::cast_possible_truncation)]
+    let rounded = sum as f32;
+    Ok(rounded)
+}
+
 fn sample_component(c: &Component, knots: Option<&Knots>, frame: f32, default: f32) -> Result<f32> {
     Ok(match c {
         Component::Absent => default,
         Component::Static(v) => *v,
         Component::Spline(points) => {
             let knots = knots.ok_or_else(|| invalid(0, "a spline component without knots"))?;
-            let mut sum = 0.0;
-            for (p, w) in evaluate(knots, frame, points.len())? {
-                let point = points
-                    .get(p)
-                    .ok_or_else(|| invalid(0, format!("control point {p} of {} is missing", points.len())))?;
-                sum += f64::from(*point) * w;
-            }
-            // rounded once to f32
-            #[allow(clippy::cast_possible_truncation)]
-            let rounded = sum as f32;
-            rounded
+            spline_value(knots, points, frame)?
         }
     })
 }
@@ -307,6 +373,7 @@ mod tests {
     fn built(blocks: usize, num_frames: u32, max_frames_per_block: u32) -> SplineAnimation {
         SplineAnimation {
             blocks: vec![vec![still()]; blocks],
+            floats: vec![Vec::new(); blocks],
             unreadable: Vec::new(),
             duration: 1.0,
             num_frames,

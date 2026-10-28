@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Float tracks, and the cutscene binders' rotations, read. A read of both installs (19,137 + 68,722 distinct tagfiles) now
+parses all 60,209 spline animations, the 11,581 of Sekiro and 48,628 of Elden Ring, where 0.4.0 refused 608 for their
+float track and 2 for a rotation float that is not finite.
+
+- Breaking: `SplineAnimation::parse` reads float tracks. 66 Sekiro and 542 Elden Ring cutscene animations have one
+  each, a camera's field of view (the binding drives the skeleton's one float slot, `camNNNN_FOV`). `SplineAnimation::floats`
+  has the float tracks of each block as `FloatTrack`: `Static` (mask byte `0x03`, one f32; 946 blocks) or `Spline`
+  (`0x12`, 16-bit control points between a stored lowest and highest value, with knots as a transform spline has them; 164
+  blocks, degree 1 or 3). `sample_float` evaluates one at a time and `floats_at` poses a skeleton's float slots as
+  `pose_at` poses its bones. Any other mask byte, and an animation with more than one float track (what pads between
+  two has not been seen), is refused by name. `maskAndQuantizationSize` is checked against
+  `round4(4 * transform tracks + float tracks)` (it holds in all 60,209 animations).
+- Breaking: `Unreadable::point` (a new field) names the control point of a rotation spline. An uncompressed rotation
+  with a float that is not finite is stored data, not a misread, and is read as stored and named in
+  `SplineAnimation::unreadable` (`part` is `rotation`) instead of refusing the animation: Elden Ring's cutscenes
+  `s12_05_0020` cut0040 and cut0060 each store one control point of four quiet NaNs (`0x7FC00000`) in the rotation
+  spline of the wing bone `R_Wing_12`, among 248 and 255 finite unit quaternions, and the bytes around them parse to the
+  block's exact end. `sample` refuses (an error, not a rotation) a time that blends such a point.
+- Cutscene binders' rotations: Sekiro's 17,014 cutscene transform tracks all select quantization 1 (40 bit), Elden Ring's
+  267,433 all select 5 (uncompressed); codes 0, 3 and 4 occur in no track of either install and stay refused.
+- Tests: hand-built blocks with static and spline float tracks, the refused mask bytes, non-finite values and
+  ranges, the mask size, the bytes after float data, the slot a binding names, and a rotation spline with a NaN
+  control point (and a static one); a real-data test (`tests/float_tracks.rs`, inputs `corpus.sekiro/havok-float` and
+  `corpus.elden/havok-float`, skipped without them) reads five cutscene tagfiles against values a separate walk of the
+  block layout found.
 - `extern_mesh` and `ExternMesh`: the triangles of an `hknpExternMeshShape` (the shape of every body of the map
   collision `f` binders), read from its `hknpDefaultExternMeshShapeGeometry` and `hkGeometry`: vertices (finite, fourth
   lane exactly 1), triangles (every index names a vertex) and their materials, and 2018.1's
