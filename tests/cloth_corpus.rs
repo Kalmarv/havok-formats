@@ -212,6 +212,8 @@ fn expected(game: Game) -> Counts {
             // only Elden Ring's hclConstraintSet stores constraintId
             &[("constraint sets with an id", 14_262)],
         ),
+        // the PlayStation 3 game has no tagfiles and no cloth
+        Game::Shred => (&[], &[]),
     };
     // neither install has state transitions, actions or anti-pinch sets: they count 0
     let zero = [

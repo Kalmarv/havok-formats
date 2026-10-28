@@ -1,36 +1,41 @@
-//! Bounds-checked view of Havok binary *packfiles* (the pre-tagfile `0x57E0E057 0x10C0C010` container), version 7
-//! with the 7.1.0-r1 contents version, 4-byte pointers, big endian: the layout Tony Hawk's SHRED (PS3) ships.
-//! Only that layout is read; any other version or layout rules are refused by name.
+//! Bounds-checked view of Havok binary *packfiles* (the pre-tagfile `0x57E0E057 0x10C0C010` container): version 7 with
+//! the 7.1.0-r1 contents version, 4-byte pointers, big endian (the layout Tony Hawk's SHRED (PS3) ships, and the one
+//! [`physics`] decodes), and versions 9 and 11 with 8-byte pointers, little endian, the `hk_2013.1.0-r1` and
+//! `hk_2014.1.0-r1` contents versions (the face animations and the behaviour file Sekiro and Elden Ring ship). Any
+//! other version or layout rules are refused by name.
 //!
-//! Layout (offsets from the file start; every field held on 490 Tony Hawk's SHRED (PS3) files):
+//! Layout (offsets from the file start; every field held on the 490 Tony Hawk's SHRED (PS3) files, and, where it says
+//! "v9/v11", on the 35 distinct packfiles of Sekiro (29) and Elden Ring (6)):
 //!
 //! | offset | field | check |
 //! |---|---|---|
 //! | `0x00` | magic `57 E0 E0 57 10 C0 C0 10` | exact |
 //! | `0x08` | user tag, kept in [`Packfile::user_tag`] | read, not interpreted (0 in every file) |
-//! | `0x0C` | file version | 7 |
-//! | `0x10` | layout rules: pointer size, little-endian flag, reuse-padding, empty-base-optimisation | `4, 0, 1, 1` |
+//! | `0x0C` | file version | 7, 9 or 11 |
+//! | `0x10` | layout rules: pointer size, little-endian flag, reuse-padding, empty-base-optimisation | `4, 0, 1, 1` (7); `8, 1, 0, 1` (9, 11) |
 //! | `0x14` | section count | headers fit the file |
 //! | `0x18`, `0x1C` | contents section index and offset (the root object) | the data section; a virtual-fixup target |
 //! | `0x20`, `0x24` | class-name section index and the root's class-name offset | the class-name section; a listed name |
-//! | `0x28` | contents version, 16 bytes, NUL-terminated | `Havok-7.1.0-r1` |
-//! | `0x38`, `0x3C` | two filler words, kept in [`Packfile::filler`] | read, not interpreted (`0xFFFFFFFF` in every file) |
-//! | `0x40 + 48 i` | section header: tag (20 bytes: the name, NULs, and `0xFF` as byte 19), then `start, local, global, virtual, exports, imports, end` | in order, inside the file |
+//! | `0x28` | contents version, 16 bytes, NUL-terminated | `Havok-7.1.0-r1`; `hk_2013.1.0-r1` (9); `hk_2014.1.0-r1` (11) |
+//! | `0x38`, `0x3C` | two header words, kept in [`Packfile::filler`] | read, not interpreted (7: `0xFFFFFFFF` twice; 9: `0`, `0xFFFFFFFF`; 11: `0` and the two 16-bit fields below, `0x15`, `0x10`; `0x15`, `0` in the file without a region) |
+//! | `0x40` | version 11 only: the predicate region, as many bytes as the 16-bit field at `0x3E` says (16 bytes in 28 of the 29 version 11 files, none in the other), kept in [`Packfile::predicate_region`] | read, not interpreted |
+//! | `0x40 + 48 i` (7, 9) or `+ region + 64 i` (11) | section header: tag (20 bytes: the name, NULs, and `0xFF` as byte 19), then `start, local, global, virtual, exports, imports, end`; in 11 sixteen `0xFF` bytes follow | in order, inside the file |
 //!
-//! In version 7 the two words at `0x38` hold no value (`0xFFFFFFFF` in every file). Readers of later versions read a
-//! flags word at `0x38` and two 16-bit predicate fields at `0x3C` and `0x3E` there; this reader refuses those versions.
+//! In version 7 the two words at `0x38` hold no value (`0xFFFFFFFF` in every file). In version 11 they are a flags word
+//! and two 16-bit fields (`0x3C`: 21, `0x3E`: the predicate region's size, 16; the one file without a region stores 0 there).
 //!
 //! `__classnames__` holds `u32 signature, 0x09, name\0` entries (then `0xFF` padding). A signature is a CRC-32 of the
 //! class's member list (and its ancestors'), so it names the class definition the file was written against; each of
-//! the 24 names in the corpus has one signature, listed in [`CLASS_SIGNATURES`], and a file that stores another
-//! signature for one of those names is refused. `__types__` is empty: there is no reflection, so class layouts live in
-//! [`physics`], stated per SDK version and confirmed on the data. `__data__` holds the
+//! the 24 names in the 7.1 corpus has one signature, listed in [`CLASS_SIGNATURES`], and a version 7 file that stores
+//! another signature for one of those names is refused. `__types__` is empty in 517 of the 525 files, so their
+//! class layouts live in [`physics`], stated per SDK version and confirmed on the data; the other eight (SHRED's ragdolls)
+//! carry the classes themselves, read by [`reflection`]. `__data__` holds the
 //! objects; its fixups are local `{src,dst}`, global `{src,section,dst}` and virtual `{src,section,class-name offset}`,
-//! each list ending at `0xFFFFFFFF` (the rest of its range is `0xFFFFFFFF` padding). An *object* is a virtual-fixup target
-//! on a 16-byte boundary; it extends to the next one (arrays and strings that follow belong to it). A pointer slot is
-//! non-null iff it has a local or global fixup, and holds zero either way. A fixup's source is a 4-byte-aligned word; a
-//! local fixup's target is 4-byte aligned and a global fixup's 16-byte aligned. An array header is `ptr, size,
-//! size | 0x80000000`, with a fixup on the pointer iff the array is not empty.
+//! each list padded with `0xFFFFFFFF` words to a 16-byte boundary (a list that ends on one has no terminator). An *object* is a
+//! virtual-fixup target on a 16-byte boundary; it extends to the next one (arrays and strings that follow belong to it). A
+//! pointer slot is non-null iff it has a local or global fixup, and holds zero either way. A fixup's source is a
+//! pointer-aligned word; a local fixup's target is 4-byte aligned and a global fixup's 16-byte aligned. An array header
+//! is `ptr, size, size | 0x80000000`, with a fixup on the pointer iff the array is not empty.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -46,10 +51,102 @@ use primase_foundations::bytes::{
 
 use crate::{Error, Result, invalid};
 
+pub mod image;
 pub mod physics;
+pub mod reflection;
 
-/// The contents version this reader knows.
+/// The contents version of the version 7 files, the one [`physics`] decodes.
 pub const CONTENTS_VERSION: &str = "Havok-7.1.0-r1";
+
+/// How a packfile lays its words out: the four bytes at `0x10`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rules {
+    /// Bytes in a pointer: 4 or 8.
+    pub pointer_size: usize,
+    /// Whether the words of the file are little endian.
+    pub little_endian: bool,
+    /// Whether a derived class's first member may start in its parent's tail padding.
+    pub reuse_padding: bool,
+    /// Whether an empty base class takes no byte.
+    pub empty_base: bool,
+}
+
+impl Rules {
+    /// The rules of the version 7 files (PowerPC: 4-byte pointers, big endian, padding reused): `4, 0, 1, 1`.
+    pub const POWERPC_32: Rules = Rules {
+        pointer_size: 4,
+        little_endian: false,
+        reuse_padding: true,
+        empty_base: true,
+    };
+    /// The rules of the version 9 and 11 files (x86-64 Windows: 8-byte pointers, little endian, no padding reuse):
+    /// `8, 1, 0, 1`.
+    pub const WINDOWS_64: Rules = Rules {
+        pointer_size: 8,
+        little_endian: true,
+        reuse_padding: false,
+        empty_base: true,
+    };
+    fn from_bytes([pointer, little, reuse, empty_base]: [u8; 4]) -> Option<Self> {
+        let flag = |b: u8| match b {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
+        Some(Rules {
+            pointer_size: usize::from(pointer),
+            little_endian: flag(little)?,
+            reuse_padding: flag(reuse)?,
+            empty_base: flag(empty_base)?,
+        })
+    }
+    /// The four bytes at `0x10`.
+    pub fn bytes(self) -> [u8; 4] {
+        [
+            u8::try_from(self.pointer_size).unwrap_or(0),
+            u8::from(self.little_endian),
+            u8::from(self.reuse_padding),
+            u8::from(self.empty_base),
+        ]
+    }
+    fn order(self) -> primase_foundations::bytes::Endian {
+        if self.little_endian { Little } else { Big }
+    }
+}
+
+/// A packfile layout the readers know: the file version, the rules, the contents version and the size of a section
+/// header.
+#[derive(Debug, Clone, Copy)]
+struct Known {
+    version: u32,
+    rules: Rules,
+    contents: &'static str,
+    /// Bytes from one section header to the next.
+    stride: usize,
+}
+
+/// The layouts read: Tony Hawk's SHRED's (490 files), and Sekiro's and Elden Ring's (26 + 3 files of Sekiro and 3 + 3
+/// of Elden Ring, distinct).
+const KNOWN: [Known; 3] = [
+    Known {
+        version: 7,
+        rules: Rules::POWERPC_32,
+        contents: CONTENTS_VERSION,
+        stride: 48,
+    },
+    Known {
+        version: 9,
+        rules: Rules::WINDOWS_64,
+        contents: "hk_2013.1.0-r1",
+        stride: 48,
+    },
+    Known {
+        version: 11,
+        rules: Rules::WINDOWS_64,
+        contents: "hk_2014.1.0-r1",
+        stride: 64,
+    },
+];
 /// Every class name of the 490 Tony Hawk's SHRED packfiles with the one signature each stores for it in every file that
 /// lists it. A file storing another signature for one of these names was written against another definition of the
 /// class, so [`Packfile::read`] refuses it; a name not listed here is kept with its signature, unchecked.
@@ -80,8 +177,9 @@ pub const CLASS_SIGNATURES: [(&str, u32); 24] = [
     ("hkpBreakableConstraintData", 0x7034_BDB6),
 ];
 const MAGIC: [u8; 8] = [0x57, 0xE0, 0xE0, 0x57, 0x10, 0xC0, 0xC0, 0x10];
-const SECTION_HEADER: usize = 48;
-const FIRST_SECTION: usize = 0x40;
+const ROOT_HEADER: usize = 0x40;
+/// The bytes of a section header that hold values: the 20-byte tag and seven 32-bit offsets.
+const SECTION_FIELDS: usize = 48;
 const END_OF_FIXUPS: u32 = 0xFFFF_FFFF;
 /// The flag the capacity word of every array in the files carries beside the size (`size | 0x80000000`, also when the
 /// array is empty).
@@ -144,12 +242,19 @@ pub struct Array {
 #[derive(Debug)]
 pub struct Packfile<'a> {
     bytes: &'a [u8],
+    /// The file version at `0x0C`: 7, 9 or 11.
+    pub version: u32,
+    /// The layout rules at `0x10`.
+    pub rules: Rules,
+    /// The contents version text at `0x28`.
+    pub contents_version: String,
     /// The section headers, in file order.
     pub sections: Vec<Section>,
     /// The user tag at `0x08`, as stored.
     pub user_tag: u32,
-    /// The two filler words at `0x38` and `0x3C`, as stored (`0xFFFFFFFF` in every version 7 file).
+    /// The two header words at `0x38` and `0x3C`, as stored (`0xFFFFFFFF` twice in every version 7 file).
     pub filler: [u32; 2],
+    predicate_region: &'a [u8],
     classes: Vec<ClassName>,
     data_start: usize,
     data_len: usize,
@@ -238,13 +343,25 @@ fn to_usize(w: u32) -> usize {
 }
 
 impl<'a> Packfile<'a> {
-    /// Parse and check the container (header, sections, class names, every fixup).
+    /// Parse and check the container (header, sections, class names, every fixup). The accessors read the `__data__`
+    /// section; [`types`](Self::types) is the same view of `__types__`.
     pub fn read(bytes: &'a [u8]) -> Result<Self> {
+        Self::read_section(bytes, "__data__")
+    }
+
+    /// The view of the `__types__` section, which holds the class metadata (`hkClass`, `hkClassEnum` objects) of a file
+    /// written with reflection: the same parse over that section's bytes and fixups, with its own objects. `None` when
+    /// the section is empty (it is in 517 of the 525 packfiles of the games). It has no root: [`root`](Self::root) is 0.
+    pub fn types(&self) -> Result<Option<Packfile<'a>>> {
+        let empty = self.sections.iter().any(|s| s.tag == "__types__" && s.end == 0);
+        if empty {
+            return Ok(None);
+        }
+        Self::read_section(self.bytes, "__types__").map(Some)
+    }
+
+    fn read_section(bytes: &'a [u8], subject: &str) -> Result<Self> {
         let v = View::new(bytes);
-        let u32_at = |o: usize, what: &str| v.u32(o, Big).map_err(bounds(o, what));
-        let usize_at = |o: usize, what: &str| -> Result<usize> {
-            usize::try_from(u32_at(o, what)?).map_err(|_| invalid(o, "value exceeds the address space"))
-        };
         let magic = v.array::<8>(0).map_err(bounds(0, "the magic"))?;
         if magic != MAGIC {
             return Err(invalid(0, "not a Havok packfile (magic)"));
@@ -256,52 +373,73 @@ impl<'a> Packfile<'a> {
             _ => Big,
         };
         let version = v.u32(0x0C, order).map_err(bounds(0x0C, "the file version"))?;
-        if version != 7 {
+        let Some(known) = KNOWN.iter().find(|k| k.version == version) else {
             return Err(invalid(
                 0x0C,
                 format!(
-                    "unsupported packfile version {version} (7 only){}",
+                    "unsupported packfile version {version} (7, 9 and 11 only){}",
                     foreign_sdk(bytes, true)
                 ),
             ));
-        }
+        };
         let layout = v.array::<4>(0x10).map_err(bounds(0x10, "the layout rules"))?;
         let [ptr, little, reuse, empty_base] = layout;
-        if ptr != 4 {
+        let want = known.rules;
+        if usize::from(ptr) != want.pointer_size {
             return Err(invalid(
                 0x10,
                 format!(
-                    "unsupported pointer size {ptr} (4 only){}",
+                    "unsupported pointer size {ptr} ({} only in version {version}){}",
+                    want.pointer_size,
                     foreign_sdk(bytes, true)
                 ),
             ));
         }
-        if little != 0 {
+        if (little != 0) != want.little_endian {
             return Err(invalid(
                 0x11,
                 format!(
-                    "unsupported byte order: little endian (big endian only){}",
+                    "unsupported byte order: {} ({} only in version {version}){}",
+                    if little != 0 {
+                        "little endian"
+                    } else {
+                        "big endian"
+                    },
+                    if want.little_endian {
+                        "little endian"
+                    } else {
+                        "big endian"
+                    },
                     foreign_sdk(bytes, true)
                 ),
             ));
         }
-        if reuse != 1 || empty_base != 1 {
+        let rules = Rules::from_bytes(layout).filter(|r| *r == want);
+        let Some(rules) = rules else {
             return Err(invalid(
                 0x12,
                 format!(
-                    "unsupported layout rules: reuse padding {reuse}, empty base optimisation {empty_base} (1, 1 only){}",
+                    "unsupported layout rules: reuse padding {reuse}, empty base optimisation {empty_base} ({}, {} only in version {version}){}",
+                    u8::from(want.reuse_padding),
+                    u8::from(want.empty_base),
                     foreign_sdk(bytes, true)
                 ),
             ));
-        }
+        };
+        let order = rules.order();
+        let u32_at = |o: usize, what: &str| v.u32(o, order).map_err(bounds(o, what));
+        let usize_at = |o: usize, what: &str| -> Result<usize> {
+            usize::try_from(u32_at(o, what)?).map_err(|_| invalid(o, "value exceeds the address space"))
+        };
         let version_text = v.slice(0x28, 16).map_err(bounds(0x28, "the contents version"))?;
         let version_text = version_text.split(|&b| b == 0).next().unwrap_or_default();
-        if version_text != CONTENTS_VERSION.as_bytes() {
+        if version_text != known.contents.as_bytes() {
             return Err(invalid(
                 0x28,
                 format!(
-                    "unsupported contents version {:?} ({CONTENTS_VERSION} only){}",
+                    "unsupported contents version {:?} ({} only in version {version}){}",
                     String::from_utf8_lossy(version_text),
+                    known.contents,
                     foreign_sdk(bytes, false)
                 ),
             ));
@@ -311,16 +449,41 @@ impl<'a> Packfile<'a> {
             u32_at(0x38, "the header filler")?,
             u32_at(0x3C, "the header filler")?,
         ];
+        // version 11 puts a predicate region between the root header and the first section header; its size is the
+        // 16-bit field at 0x3E (16 in every file)
+        let region = if version == 11 {
+            let size = usize::from(
+                v.u16(0x3E, order)
+                    .map_err(bounds(0x3E, "the predicate region size"))?,
+            );
+            v.slice(ROOT_HEADER, size)
+                .map_err(bounds(ROOT_HEADER, "the predicate region"))?
+        } else {
+            &[]
+        };
+        let first_section = sum(ROOT_HEADER, ROOT_HEADER, region.len())?;
+        let stride = known.stride;
         let count = usize_at(0x14, "the section count")?;
         let table_end = count
-            .checked_mul(SECTION_HEADER)
-            .and_then(|n| n.checked_add(FIRST_SECTION))
+            .checked_mul(stride)
+            .and_then(|n| n.checked_add(first_section))
             .filter(|&end| end <= bytes.len())
             .ok_or_else(|| invalid(0x14, "the section headers run past the file"))?;
         let mut sections = Vec::new();
         for i in 0..count {
             // in range: the table fits the file (checked above)
-            let o = FIRST_SECTION.saturating_add(i.saturating_mul(SECTION_HEADER));
+            let o = first_section.saturating_add(i.saturating_mul(stride));
+            // a version 11 header ends in sixteen 0xFF bytes
+            if let Some(pad) = stride
+                .checked_sub(SECTION_FIELDS)
+                .and_then(|n| v.slice(o.saturating_add(SECTION_FIELDS), n).ok())
+                && pad.iter().any(|&b| b != 0xFF)
+            {
+                return Err(invalid(
+                    o.saturating_add(SECTION_FIELDS),
+                    "the end of a section header is not 0xFF padding",
+                ));
+            }
             let field = v.array::<20>(o).map_err(bounds(o, "a section tag"))?;
             let [tag_area @ .., marker] = field;
             if marker != 0xFF {
@@ -381,15 +544,14 @@ impl<'a> Packfile<'a> {
             match (found.next(), found.next()) {
                 (Some(i), None) => Ok(i),
                 _ => Err(invalid(
-                    FIRST_SECTION,
+                    first_section,
                     format!("expected exactly one {tag} section"),
                 )),
             }
         };
         let class_section = section_named("__classnames__")?;
         let data_section = section_named("__data__")?;
-        section_named("__types__")?;
-        // the level files' __types__ is empty; files with reflection data in it are accepted, and it is not read
+        let subject_section = section_named(subject)?;
         if usize_at(0x18, "the contents section")? != data_section {
             return Err(invalid(0x18, "the root object is not in the data section"));
         }
@@ -400,9 +562,9 @@ impl<'a> Packfile<'a> {
             ));
         }
         let (Some(class_header), Some(data_header)) =
-            (sections.get(class_section), sections.get(data_section))
+            (sections.get(class_section), sections.get(subject_section))
         else {
-            return Err(invalid(FIRST_SECTION, "section index out of range"));
+            return Err(invalid(first_section, "section index out of range"));
         };
         // class names
         let class_bytes = v
@@ -424,7 +586,7 @@ impl<'a> Packfile<'a> {
                 .map_err(|_| invalid(here, "class name is not text"))?;
             if let Some((_, want)) = CLASS_SIGNATURES
                 .iter()
-                .find(|(known, want)| *known == name && *want != signature)
+                .find(|(known, want)| version == 7 && *known == name && *want != signature)
             {
                 return Err(invalid(
                     here,
@@ -493,18 +655,22 @@ impl<'a> Packfile<'a> {
         };
         // in the 490 files a fixup's source is a 4-byte word at a 4-byte offset (all 130,610), the target of a local one
         // is 4-byte aligned (82,847) and the target of a global one 16-byte aligned (47,763)
+        let pointer_size = rules.pointer_size;
+        // the strings of an array of strings in the version 9 and 11 files follow one another from 2-byte boundaries: of
+        // the 2,526 local targets of the 35 files 43 are not 4-byte aligned and none is odd
+        let local_alignment = if version == 7 { 4 } else { 2 };
         let slot = |at: usize, dst: usize, dst_alignment: usize, what: &str| -> Result<()> {
-            let in_range = sum(data_start, at, 4)? <= data_len;
+            let in_range = sum(data_start, at, pointer_size)? <= data_len;
             if !in_range || dst > data_len {
                 return Err(invalid(
                     data_start.saturating_add(at),
                     format!("{what} fixup {at:#x} -> {dst:#x} is outside the data"),
                 ));
             }
-            if !at.is_multiple_of(4) {
+            if !at.is_multiple_of(pointer_size) {
                 return Err(invalid(
                     data_start.saturating_add(at),
-                    format!("{what} fixup source {at:#x} is not 4-byte aligned"),
+                    format!("{what} fixup source {at:#x} is not {pointer_size}-byte aligned"),
                 ));
             }
             if !dst.is_multiple_of(dst_alignment) {
@@ -518,7 +684,7 @@ impl<'a> Packfile<'a> {
         let mut local = Vec::new();
         for e in fixups(data_header.local, data_header.global, 2)? {
             let (src, dst) = (e.first().copied().unwrap_or(0), e.get(1).copied().unwrap_or(0));
-            slot(src, dst, 4, "local")?;
+            slot(src, dst, local_alignment, "local")?;
             local.push((src, dst));
         }
         let mut global = Vec::new();
@@ -528,10 +694,10 @@ impl<'a> Packfile<'a> {
                 e.get(1).copied().unwrap_or(0),
                 e.get(2).copied().unwrap_or(0),
             );
-            if sec != data_section {
+            if sec != subject_section {
                 return Err(invalid(
                     data_start.saturating_add(src),
-                    format!("global fixup into section {sec} (the data section only)"),
+                    format!("global fixup into section {sec} (its own section only)"),
                 ));
             }
             slot(src, dst, 16, "global")?;
@@ -602,26 +768,35 @@ impl<'a> Packfile<'a> {
                 class,
             });
         }
-        let root = usize_at(0x1C, "the root offset")?;
-        let root_name = usize_at(0x24, "the root class name")?;
-        let root_object = objects
-            .binary_search_by_key(&root, |o| o.offset)
-            .ok()
-            .and_then(|i| objects.get(i));
-        match root_object.and_then(|o| classes.get(o.class)) {
-            Some(c) if c.offset == root_name => {}
-            _ => {
-                return Err(invalid(
-                    0x1C,
-                    "the root offset/class is not a virtual-fixup object",
-                ));
+        let root = if subject_section == data_section {
+            let root = usize_at(0x1C, "the root offset")?;
+            let root_name = usize_at(0x24, "the root class name")?;
+            let root_object = objects
+                .binary_search_by_key(&root, |o| o.offset)
+                .ok()
+                .and_then(|i| objects.get(i));
+            match root_object.and_then(|o| classes.get(o.class)) {
+                Some(c) if c.offset == root_name => {}
+                _ => {
+                    return Err(invalid(
+                        0x1C,
+                        "the root offset/class is not a virtual-fixup object",
+                    ));
+                }
             }
-        }
+            root
+        } else {
+            0
+        };
         Ok(Self {
             bytes,
+            version,
+            rules,
+            contents_version: known.contents.to_owned(),
             sections,
             user_tag,
             filler,
+            predicate_region: region,
             classes,
             data_start,
             data_len,
@@ -630,6 +805,27 @@ impl<'a> Packfile<'a> {
             objects,
             root,
         })
+    }
+
+    /// The predicate region of a version 11 file (between the root header and the first section header), as stored;
+    /// empty in the other versions.
+    pub fn predicate_region(&self) -> &'a [u8] {
+        self.predicate_region
+    }
+
+    /// An error unless the file has the layout [`physics`] decodes: version 7, 4-byte pointers, big endian.
+    pub(crate) fn require_710(&self) -> Result<()> {
+        if self.version == 7 {
+            Ok(())
+        } else {
+            Err(invalid(
+                0x0C,
+                format!(
+                    "the physics views decode version 7 files (Havok-7.1.0-r1), not version {} ({})",
+                    self.version, self.contents_version
+                ),
+            ))
+        }
     }
 
     /// Every object, in data order.
@@ -711,13 +907,36 @@ impl<'a> Packfile<'a> {
             .copied()
             .ok_or_else(|| self.err(offset, "empty read"))
     }
-    /// The big-endian `u16` at `offset` in the data section.
+    /// The `u16` at `offset` in the data section, in the file's byte order.
     pub fn u16(&self, offset: usize) -> Result<u16> {
-        Ok(u16::from_be_bytes(self.array(offset)?))
+        let b = self.array(offset)?;
+        Ok(if self.rules.little_endian {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        })
     }
-    /// The big-endian `u32` at `offset` in the data section.
+    /// The `u32` at `offset` in the data section, in the file's byte order.
     pub fn u32(&self, offset: usize) -> Result<u32> {
-        Ok(u32::from_be_bytes(self.array(offset)?))
+        let b = self.array(offset)?;
+        Ok(if self.rules.little_endian {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        })
+    }
+    /// The pointer-sized word at `offset` (4 or 8 bytes by the file's rules), as stored.
+    pub fn word(&self, offset: usize) -> Result<u64> {
+        if self.rules.pointer_size == 8 {
+            let b = self.array(offset)?;
+            Ok(if self.rules.little_endian {
+                u64::from_le_bytes(b)
+            } else {
+                u64::from_be_bytes(b)
+            })
+        } else {
+            self.u32(offset).map(u64::from)
+        }
     }
     /// A `u32` as a size or count.
     pub fn count(&self, offset: usize) -> Result<usize> {
@@ -725,7 +944,8 @@ impl<'a> Packfile<'a> {
     }
     /// A finite `f32` (NaN and infinity are errors).
     pub fn f32(&self, offset: usize) -> Result<f32> {
-        let x = f32::from_be_bytes(self.array(offset)?);
+        let bits = self.u32(offset)?;
+        let x = f32::from_bits(bits);
         if x.is_finite() {
             Ok(x)
         } else {
@@ -749,7 +969,7 @@ impl<'a> Packfile<'a> {
     /// The pointer stored at `offset`: None when null. A slot with a fixup resolves to its target in the data section;
     /// the slot holds zero either way.
     pub fn pointer(&self, offset: usize) -> Result<Option<usize>> {
-        let word = self.u32(offset)?;
+        let word = self.word(offset)?;
         let local = self
             .local
             .binary_search_by_key(&offset, |(s, _)| *s)
@@ -781,8 +1001,9 @@ impl<'a> Packfile<'a> {
     /// set, also for an empty array; a non-empty array has data (a fixup) and an empty one has none.
     pub fn array_header(&self, offset: usize) -> Result<Array> {
         let data = self.pointer(offset)?;
-        let len = self.count(self.at(offset, 4)?)?;
-        let cap = self.u32(self.at(offset, 8)?)?;
+        let size_at = self.at(offset, self.rules.pointer_size)?;
+        let len = self.count(size_at)?;
+        let cap = self.u32(self.at(size_at, 4)?)?;
         let want = u32::try_from(len).map(|n| n | ARRAY_CAPACITY_FLAG).ok();
         if want != Some(cap) {
             return Err(self.err(
@@ -795,6 +1016,25 @@ impl<'a> Packfile<'a> {
         }
         if len == 0 && data.is_some() {
             return Err(self.err(offset, "empty array has a fixup"));
+        }
+        Ok(Array { data, len })
+    }
+
+    /// A pointer and a 32-bit count at `offset` and `offset + pointer size` (an `hkSimpleArray`), its `stride`-byte
+    /// elements inside the section. A non-empty array has data (a fixup) and an empty one has none.
+    pub fn simple_array(&self, offset: usize, stride: usize) -> Result<Array> {
+        let data = self.pointer(offset)?;
+        let len = self.count(self.at(offset, self.rules.pointer_size)?)?;
+        match data {
+            None if len != 0 => return Err(self.err(offset, "non-empty array has no data")),
+            Some(_) if len == 0 => return Err(self.err(offset, "empty array has a fixup")),
+            Some(at) => {
+                let size = len
+                    .checked_mul(stride)
+                    .ok_or_else(|| self.err(offset, "array size overflows the address space"))?;
+                self.bytes(at, size)?;
+            }
+            None => {}
         }
         Ok(Array { data, len })
     }

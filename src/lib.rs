@@ -9,15 +9,17 @@
 //!   (`TCM0`): [`Tagfile`] and [`Compendium`]. Class layouts come from the file's own type metadata, so any class
 //!   can be read field by field through [`Value`] and [`Array`]. [`Tagfile::image`] makes an editable [`TagfileImage`],
 //!   which writes a tagfile again.
-//! - **Packfiles** (version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian): [`packfile`].
+//! - **Packfiles** (version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian; versions 9 and 11,
+//!   `hk_2013.1.0-r1` and `hk_2014.1.0-r1`, 8-byte pointers, little endian): [`packfile`], their editable image
+//!   ([`packfile::image`]) and the class metadata some of them carry ([`packfile::reflection`]).
 //! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`], with their bounding-volume trees
 //!   [`mesh_trees`] and [`simd_tree`]), extern triangle meshes ([`extern_mesh`]),
 //!   convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, animation bindings and spline
 //!   compressed animation ([`animation`], [`spline`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles
 //!   ([`packfile::physics`]).
 //!
-//! It was written against Sekiro (tagfiles, 2016.2), Elden Ring (tagfiles, 2018.1) and Tony Hawk's SHRED for PS3
-//! (packfiles).
+//! It was written against Sekiro (tagfiles, 2016.2; packfiles, versions 9 and 11), Elden Ring (tagfiles, 2018.1;
+//! packfiles, versions 9 and 11) and Tony Hawk's SHRED for PS3 (packfiles, version 7).
 //!
 //! # Guarantees
 //!
@@ -28,7 +30,9 @@
 //!
 //! It does not validate every byte of a file, only what the accessors you call read. It writes tagfiles
 //! ([`Tagfile::image`] and [`TagfileImage::write`]: an unedited file comes back byte for byte, an edited one with its
-//! items numbered and laid out as the game's files are) but not packfiles, and it does not simulate anything.
+//! items numbered and laid out as the game's files are) and packfiles
+//! ([`packfile::Packfile::image`] and [`packfile::image::PackfileImage::write`], the same), and it does not simulate
+//! anything.
 //!
 //! # Example
 //!
@@ -113,7 +117,7 @@ mod value;
 pub use tagfile::{Item, ItemKind, SDK_VERSIONS, Tagfile};
 pub use tagfile_write::{ImageItem, TagfileImage};
 pub use types::{Compendium, Field, Type, TypeFlags};
-pub use value::{Array, Value};
+pub use value::{Array, HALF_FORMAT, Value};
 
 pub use section::{Section, sections};
 pub use simdtree::{LaneBox, SimdCheck, SimdLane, SimdNode, SimdTree, simd_tree};

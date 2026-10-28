@@ -5,14 +5,14 @@ A Rust library that reads Havok physics and animation data as games store it: ta
 ## What it reads
 
 - **Tagfiles** (`TAG0`), SDK versions **2015.1**, **2016.2** and **2018.1**, and their external type compendia (`TCM0`). Class layouts come from each file's own type metadata, so any class can be read field by field.
-- **Packfiles** (the older `0x57E0E057 0x10C0C010` container), version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian.
+- **Packfiles** (the older `0x57E0E057 0x10C0C010` container), version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian; versions 9 and 11, contents versions `hk_2013.1.0-r1` and `hk_2014.1.0-r1`, 8-byte pointers, little endian. `Packfile::image` and `PackfileImage::write` write them back byte for byte, and `packfile::reflection` reads the class metadata a file carries and checks it against the signatures the file stores.
 - **Objects**, read by class from those files:
   - `hknp` compressed meshes (triangles, dead primitives, custom primitives, extern shape instances, and the bounding-volume trees of the mesh, of each section and the four-lane simd tree, decoded and checked as they are read), extern triangle meshes (`hknpExternMeshShape` over `hkGeometry`) and convex shapes;
   - cloth (the whole `hclClothData`: sim cloths with their particles, rest poses, constraint sets of every kind the games use, collidables and shapes, and the buffers, transform sets, operators and states around them), ragdoll data and constraint descriptions;
   - skeletons, animation bindings and animation containers, and `hkaSplineCompressedAnimation` decoded to bone transforms at a time;
   - 7.1 `hkp` rigid bodies and collision shapes in packfiles (rigid body, MOPP tree, storage extended mesh, convex vertices, box, sphere, capsule, cylinder, convex translate, list).
 
-It was written against Sekiro (tagfiles, 2016.2), Elden Ring (tagfiles, 2018.1) and Tony Hawk's SHRED for PS3 (packfiles). It is an independent reader of the stored formats: it contains no Havok SDK code, and its knowledge of the layouts comes from the files themselves and from public documentation and open-source readers.
+It was written against Sekiro (tagfiles, 2016.2; packfiles, versions 9 and 11), Elden Ring (tagfiles, 2018.1; packfiles, versions 9 and 11) and Tony Hawk's SHRED for PS3 (packfiles, version 7). It is an independent reader of the stored formats: it contains no Havok SDK code, and its knowledge of the layouts comes from the files themselves and from public documentation and open-source readers.
 
 ## Example
 
@@ -52,9 +52,9 @@ The same code is the compile-checked doc test of the crate documentation, and, t
 
 ## What it does not do
 
-- It writes tagfiles only (`TagfileImage::write`: the type table as read, the items renumbered and laid out as the game's own files are), not packfiles, and it does not simulate: no physics, cloth solver or animation blending.
+- It writes tagfiles (`TagfileImage::write`: the type table as read, the items renumbered and laid out as the game's own files are) and packfiles (`PackfileImage::write`, the same), and it does not simulate: no physics, cloth solver or animation blending.
 - It is not a complete validator: it checks the values its accessors read, not every unused byte of a file.
-- Tagfiles of other SDK versions, packfiles other than `Havok-7.1.0-r1` with 4-byte big-endian pointers, big-endian spline animations and ones with more than one float track, and Havok classes without a reader here are refused or left unread (`hkpMoppCode`, convex connectivity and constraint atoms are recognised by name and counted, not decoded).
+- Tagfiles of other SDK versions, packfiles of versions other than 7, 9 and 11, big-endian spline animations and ones with more than one float track, and Havok classes without a reader here are refused or left unread (`hkpMoppCode`, convex connectivity and constraint atoms are recognised by name and counted, not decoded).
 - Material meanings and coordinate-system conversions are left to the caller: it returns what the file stores.
 
 ## Tests

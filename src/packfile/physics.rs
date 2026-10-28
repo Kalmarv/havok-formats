@@ -1,5 +1,6 @@
 //! Havok 7.1.0-r1 physics class views over a [`Packfile`] (4-byte pointers, big endian). The level packfiles carry no
-//! reflection (`__types__` is empty), so every member offset below is stated from the 7.1 member order (`hkVector4`
+//! reflection (`__types__` is empty in 482 of the 490; the eight ragdoll files carry theirs, and every offset below that
+//! they cover is the one [`super::reflection`] reads from them), so every member offset below is stated from the 7.1 member order (`hkVector4`
 //! members 16-aligned) and **confirmed on the data**: the last column names the check that held on all 490 SHRED files
 //! (12,789 bodies, 1,758 extended meshes, 6,445 subparts, 646,081 triangles, 8,780 convex shapes). The member lists
 //! are the ones whose class signatures every file stores ([`super::CLASS_SIGNATURES`]; [`Packfile::read`] refuses a
@@ -176,6 +177,7 @@ fn zero(pack: &Packfile<'_>, offset: usize, len: usize, what: &str) -> Result<()
 /// (all on box-inertia bodies) and 45 extended meshes, 0 in the other 15,307 shapes. The word at `+0x0C` (the shape type)
 /// is 0 in all 15,935 shapes and is refused otherwise.
 pub fn shape_user_data(pack: &Packfile<'_>, offset: usize) -> Result<u32> {
+    pack.require_710()?;
     if pack.u32(pack.at(offset, 0x0C)?)? != 0 {
         return Err(pack.err(pack.at(offset, 0x0C)?, "the shape type word is not zero"));
     }
@@ -235,6 +237,7 @@ pub struct RigidBody {
 impl RigidBody {
     /// The rigid body at data-section `offset`; every member is checked as the table above states.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
+        pack.require_710()?;
         let at = |add| pack.at(offset, add);
         if pack.class_at(offset)? != "hkpRigidBody" {
             return Err(pack.err(offset, "not a hkpRigidBody"));
@@ -417,6 +420,7 @@ pub struct ExtendedMesh {
 impl ExtendedMesh {
     /// The extended mesh at data-section `offset`; refused when a member differs from the confirmed layout.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
+        pack.require_710()?;
         let at = |add| pack.at(offset, add);
         if pack.class_at(offset)? != "hkpStorageExtendedMeshShape" {
             return Err(pack.err(offset, "not a hkpStorageExtendedMeshShape"));
@@ -670,6 +674,7 @@ fn connectivity(pack: &Packfile<'_>, offset: usize, vertex_count: usize) -> Resu
 impl ConvexVertices {
     /// The convex vertices shape at data-section `offset`.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
+        pack.require_710()?;
         let at = |add| pack.at(offset, add);
         if pack.class_at(offset)? != "hkpConvexVerticesShape" {
             return Err(pack.err(offset, "not a hkpConvexVerticesShape"));
@@ -744,6 +749,7 @@ pub struct MoppCode {
 impl MoppCode {
     /// The MOPP code at data-section `offset`.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
+        pack.require_710()?;
         let at = |add| pack.at(offset, add);
         if pack.class_at(offset)? != "hkpMoppCode" {
             return Err(pack.err(offset, "not a hkpMoppCode"));
@@ -839,6 +845,7 @@ pub enum Shape {
 impl Shape {
     /// The shape object at `offset`; a class this module has no view for is an error naming it.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
+        pack.require_710()?;
         let at = |add| pack.at(offset, add);
         let class = pack.class_at(offset)?;
         let shape = match class {

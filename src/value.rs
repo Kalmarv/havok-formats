@@ -5,6 +5,11 @@
 )]
 use crate::{Result, Tagfile, invalid};
 
+/// The format word of `hkHalf16`, the 16-bit float type of the games' tagfiles: kind 5 (a real), 16 bits wide. The
+/// distinct type tables of Sekiro (229 tables, 56 types in them) and Elden Ring (875 tables, 215 types) hold it
+/// beside `float` (`0x174605`), the one other real format they store: no table has a double or any other width.
+pub const HALF_FORMAT: usize = 0x7_4605;
+
 /// A typed view into DATA. References remain indices, so cyclic object graphs
 /// do not cause recursive allocations or stack overflow during parsing.
 #[derive(Debug, Clone, Copy)]
@@ -341,6 +346,19 @@ impl<'t, 'a> Value<'t, 'a> {
         }
         let value = f32::from_le_bytes(self.tag.array(self.offset)?);
         Ok(value)
+    }
+    /// A stored `hkHalf16` (format word [`HALF_FORMAT`]) as the `f32` it stands for. Havok's half is the top 16 bits of
+    /// an `f32` (sign, the 8 exponent bits and 7 mantissa bits), not an IEEE binary16: the files agree, see
+    /// [`HALF_FORMAT`].
+    pub fn half(self) -> Result<f32> {
+        if self.format()? != HALF_FORMAT {
+            return Err(invalid(
+                self.at(),
+                format!("expected a half float, not a {}", self.type_name()),
+            ));
+        }
+        let [low, high] = self.tag.array(self.offset)?;
+        Ok(f32::from_bits(u32::from(u16::from_le_bytes([low, high])) << 16))
     }
     /// An array of exactly `N` floats.
     pub fn vector<const N: usize>(self) -> Result<[f32; N]> {

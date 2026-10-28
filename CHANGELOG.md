@@ -25,6 +25,33 @@ into its file.
 - `animation::replace_animation`: an animation written over the one a file stores (same class and track counts), the
   rest of the file kept, as a `TagfileImage` to write. Put back unchanged, a stock file comes back byte for byte.
 
+Packfiles: versions 9 and 11, the image and writer, the class metadata, and the half float. Checked on the games' own
+files: the 490 Tony Hawk's SHRED packfiles (version 7) and the 35 distinct packfiles of Sekiro (29) and Elden Ring (6)
+(versions 9 and 11) are read, imaged and written back byte for byte (`tests/packfile_image.rs`), and the eight SHRED
+ragdoll files that carry their classes are read into a class table whose signatures and offsets are checked against what
+the files store (`tests/reflection.rs`).
+
+- `packfile::Packfile::read` reads versions 9 (`hk_2013.1.0-r1`) and 11 (`hk_2014.1.0-r1`): 8-byte pointers, little endian,
+  48- and 64-byte section headers, the version 11 predicate region (`Packfile::predicate_region`). New fields `version`,
+  `rules` (`packfile::Rules`) and `contents_version`; `u16`, `u32`, `f32`, `pointer` and `array_header` follow the file's
+  byte order and pointer width; `Packfile::word`, `simple_array` and `types` (the same view of `__types__`) are new.
+  The class-signature table still holds the version 7 files to the 7.1 definitions only. The physics views refuse any
+  file but version 7.
+- `packfile::image`: `Packfile::image` makes a `PackfileImage` (objects as trees of byte blocks with their pointer slots,
+  the `__types__` objects, the header words) and `PackfileImage::write` lays it out again by the rules the games' files
+  follow (object order, run alignment, packed string arrays, fixup order and padding, class-name order), so an unedited
+  file comes back byte for byte.
+- `packfile::reflection`: `ClassTable::from_packfile` reads the `hkClass`, `hkClassMember` and `hkClassEnum` objects of a
+  `__types__` section (the schema for any class table: `Class`, `Member`, `Enum`, `MemberType`); `ClassTable::signature`
+  recomputes a class signature (all 96 stored signatures of the eight SHRED files reproduce) and `ClassTable::layout`
+  gives member offsets and sizes from the member lists under `Rules` (all 2,296 stored offsets and 544 class sizes).
+- `Value::half` reads an `hkHalf16` (the top 16 bits of an `f32`), `HALF_FORMAT` names its format word.
+- Tests: hostile-input checks of the packfile readers on hand-made files of all three layouts and on real files
+  (truncation at 200 places is refused, 2,000 flipped bytes panic nothing, garbage is not a packfile); the class versions
+  of both games' type tables (`tests/class_versions.rs`).
+- Breaking: the refusals for other packfile versions say `(7, 9 and 11 only)`; the pointer-size, byte-order and
+  layout-rule refusals say `in version N`. `Game::Shred` and three `havok-packfiles` oracle sets are declared in the test inputs.
+
 ## 0.8.0 (2026-10-28)
 
 Cloth (`cloth`) reads the whole `hclClothData`: what a cloth runtime needs, checked on every distinct tagfile with cloth

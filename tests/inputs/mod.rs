@@ -8,6 +8,7 @@ primase_testdata::inputs! {
     games {
         Sekiro = "sekiro",
         Elden = "elden",
+        Shred = "shred",
     }
     installs {}
     keys {}
@@ -66,6 +67,24 @@ primase_testdata::inputs! {
             gate: false,
             about: r#"the one Elden Ring tagfile whose mesh trees have sections of page above 0 (6,233 sections, pages 1 to 4; the low-resolution map collision `l14_00_00_00`, member `_000000`) and the compendium it shares, loose; tests/paged_mesh.rs decodes every mesh of it"#,
             source: r#"the game's own files from the user's install: the members of the `l14_00_00_00.hkxbhd`/`.hkxbdt` binder out of their DCX envelopes, picked by reading every map `l` binder of the install for sections of page above 0"#,
+        },
+        Query::Oracle(OracleSet::Corpus, Game::Shred, "havok-packfiles") => {
+            status: Live,
+            gate: true,
+            about: r#"the 490 Havok packfiles (version 7, `Havok-7.1.0-r1`, 4-byte pointers, big endian) of Tony Hawk's SHRED for the PS3: the level and ragdoll collision files (`.hkw`), loose; tests/packfile_image.rs reads, images and writes each of them back byte for byte"#,
+            source: r#"the game's own files from the user's disc image: every entry of the disc's archives that starts with the packfile magic, as stored"#,
+        },
+        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-packfiles") => {
+            status: Live,
+            gate: false,
+            about: r#"the 29 distinct packfiles of the install (26 of version 11, `hk_2014.1.0-r1`, and 3 of version 9, `hk_2013.1.0-r1`; 8-byte pointers, little endian), loose and named by their sha256; tests/packfile_image.rs reads, images and writes each of them back byte for byte"#,
+            source: r#"the game's own files from the user's install: every archive entry walked (named or not, nested BND4 and DCX opened), each blob that starts with the packfile magic taken out of its DCX envelope and deduplicated by sha256 (25 of the version 11 files in seven `partsbnd`, the other, `c9996.hkx`, a behaviour file in ten `behbnd` copies, and the three version 9 files)"#,
+        },
+        Query::Oracle(OracleSet::Corpus, Game::Elden, "havok-packfiles") => {
+            status: Live,
+            gate: false,
+            about: r#"the 6 distinct packfiles of the install (3 of version 11 and 3 of version 9, all face animation), loose and named by their sha256; tests/packfile_image.rs reads, images and writes each of them back byte for byte"#,
+            source: r#"the game's own files from the user's install, found as for Sekiro"#,
         },
     }
     debug {}

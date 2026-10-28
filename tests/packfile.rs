@@ -1118,16 +1118,17 @@ fn foreign(version: u32, rules: [u8; 4], contents: &[u8], signatures: [u32; 2]) 
 
 #[test]
 fn a_packfile_of_another_sdk_is_named_by_its_first_class_names() {
-    // version 11 and 9 files of the 2013.1 to 2014.2 generation: little endian, 8-byte pointers
+    // files of the 2013.1 to 2014.2 generation in versions the reader does not know (9 and 11 it reads): little endian,
+    // 8-byte pointers
     for (version, contents) in [
-        (11, &b"hk_2014.1.0-r1"[..]),
-        (9, b"hk_2013.1.0-r1"),
-        (11, b"hk_2014.2.0-r1"),
+        (10, &b"hk_2014.1.0-r1"[..]),
+        (12, b"hk_2013.1.0-r1"),
+        (8, b"hk_2014.2.0-r1"),
     ] {
         let bytes = foreign(version, [8, 1, 0, 1], contents, [0x33D4_2383, 0xB0EF_A719]);
         let e = refuse(&bytes);
         let want = format!(
-            "unsupported packfile version {version} (7 only): contents version \"{}\", class names of Havok 2013.1 to 2014.2 (hkClass 0x33d42383, hkClassMember 0xb0efa719)",
+            "unsupported packfile version {version} (7, 9 and 11 only): contents version \"{}\", class names of Havok 2013.1 to 2014.2 (hkClass 0x33d42383, hkClassMember 0xb0efa719)",
             String::from_utf8_lossy(contents)
         );
         assert!(e.contains(&want), "{e}");
@@ -1135,7 +1136,7 @@ fn a_packfile_of_another_sdk_is_named_by_its_first_class_names() {
     }
     // the same signatures in another order are the signatures of no SDK it knows, and are given as stored
     let e = refuse(&foreign(
-        11,
+        10,
         [8, 1, 0, 1],
         b"hk_2014.1.0-r1",
         [0xB0EF_A719, 0x33D4_2383],
@@ -1151,7 +1152,10 @@ fn a_packfile_of_another_sdk_is_named_by_its_first_class_names() {
         b"Havok-7.1.0-r1",
         [0x1442_5E51, 0x4A98_6551],
     ));
-    assert!(e.contains("unsupported packfile version 8 (7 only)"), "{e}");
+    assert!(
+        e.contains("unsupported packfile version 8 (7, 9 and 11 only)"),
+        "{e}"
+    );
     assert!(
         e.contains("class names of Havok 7.1.0-r1 (hkClass 0x14425e51, hkClassMember 0x4a986551)"),
         "{e}"
@@ -1167,14 +1171,14 @@ fn the_other_refusals_of_a_foreign_file_name_it_too() {
         b"Havok-7.1.0-r1",
         [0x1442_5E51, 0x4A98_6551],
     ));
-    assert!(e.contains("unsupported pointer size 8 (4 only): contents version \"Havok-7.1.0-r1\", class names of Havok 7.1.0-r1"), "{e}");
+    assert!(e.contains("unsupported pointer size 8 (4 only in version 7): contents version \"Havok-7.1.0-r1\", class names of Havok 7.1.0-r1"), "{e}");
     let e = refuse(&foreign(
         7,
         [4, 1, 1, 1],
         b"hk_2014.1.0-r1",
         [0x33D4_2383, 0xB0EF_A719],
     ));
-    assert!(e.contains("little endian (big endian only): contents version \"hk_2014.1.0-r1\", class names of Havok 2013.1 to 2014.2"), "{e}");
+    assert!(e.contains("little endian (big endian only in version 7): contents version \"hk_2014.1.0-r1\", class names of Havok 2013.1 to 2014.2"), "{e}");
     let e = refuse(&foreign(
         7,
         [4, 0, 0, 1],
@@ -1192,14 +1196,14 @@ fn the_other_refusals_of_a_foreign_file_name_it_too() {
         b"Havok-6.6.0-b1",
         [0x1442_5E51, 0x4A98_6551],
     ));
-    assert!(e.contains("unsupported contents version \"Havok-6.6.0-b1\" (Havok-7.1.0-r1 only): class names of Havok 7.1.0-r1"), "{e}");
+    assert!(e.contains("unsupported contents version \"Havok-6.6.0-b1\" (Havok-7.1.0-r1 only in version 7): class names of Havok 7.1.0-r1"), "{e}");
     assert_eq!(e.matches("Havok-6.6.0-b1").count(), 1, "{e}");
     // the fixture's first class is the root container, not hkClass, so only the contents version is named
     let mut good = scene();
     good[0x0C..0x10].copy_from_slice(&6u32.to_be_bytes());
     let e = refuse(&good);
     assert!(
-        e.ends_with("unsupported packfile version 6 (7 only): contents version \"Havok-7.1.0-r1\""),
+        e.ends_with("unsupported packfile version 6 (7, 9 and 11 only): contents version \"Havok-7.1.0-r1\""),
         "{e}"
     );
 }
@@ -1211,13 +1215,13 @@ fn a_foreign_file_without_readable_class_names_gets_the_plain_refusal() {
     head.extend(8u32.to_be_bytes());
     assert_eq!(
         refuse(&head),
-        "Havok at 0xc: unsupported packfile version 8 (7 only)"
+        "Havok at 0xc: unsupported packfile version 8 (7, 9 and 11 only)"
     );
     // a section table whose class names are not hkClass, hkClassMember, or that run off the file
-    let good = foreign(11, [8, 1, 0, 1], b"hk_2014.1.0-r1", [0x33D4_2383, 0xB0EF_A719]);
+    let good = foreign(10, [8, 1, 0, 1], b"hk_2014.1.0-r1", [0x33D4_2383, 0xB0EF_A719]);
     let plain = |bytes: &[u8]| {
         refuse(bytes)
-            .split_once("(7 only)")
+            .split_once("(7, 9 and 11 only)")
             .map(|(_, rest)| rest.to_owned())
     };
     let mut renamed = good.clone();
