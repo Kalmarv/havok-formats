@@ -20,6 +20,9 @@
 //! | `0x30`-`0x4F` | terminal: the shape key is the terminal offset plus the opcode minus `0x30` |
 //! | `0x50`-`0x53` | terminal: the offset plus the following 8, 16, 24 or 32-bit value |
 //!
+//! The command table and the query semantics follow soulstruct-havok's `utilities/mopp.py` (Grimrukh, GPL-3.0-or-later),
+//! which documents them for Demon's Souls and Dark Souls codes; this module re-checks them on SHRED's 7.1 codes.
+//!
 //! A command that none of the 1,705 codes executes is refused, with its opcode: `0x00` (return), `0x07` and `0x08` (longer
 //! jumps), `0x0C` (a jump to a chunk), `0x29`-`0x2B` (bounds with 24-bit arguments) and everything else. The opcodes are
 //! only the ones the data shows to be understood; the codes of other games that use them are not in the installs.

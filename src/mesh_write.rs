@@ -1260,6 +1260,73 @@ mod tests {
         assert_eq!(array.codes[3], 0, "the filler");
     }
 
+    /// A unit square of two triangles, worked out by hand: one section, four packed vertices in the order their
+    /// triangles first use them, the codes of a codec over the vertex box, keys 0 and 2.
+    #[test]
+    fn a_unit_square_builds_as_worked_out_by_hand() {
+        let vertices = [
+            [0.0f32, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ];
+        let triangles = [[0u32, 1, 2], [1, 3, 2]];
+        let built = build_compressed_mesh(&MeshSource {
+            vertices: &vertices,
+            triangles: &triangles,
+            convex_radius: 0.01,
+        })
+        .unwrap();
+        assert_eq!(built.sections.len(), 1);
+        let section = &built.sections[0];
+        assert_eq!(
+            (
+                section.packed_vertices,
+                section.shared_indices,
+                section.primitives
+            ),
+            (4, 0, 2)
+        );
+        assert_eq!(
+            (section.page, section.leaf_index, section.first_data_run),
+            (0, 0, 0)
+        );
+        assert!(built.shared_vertices.is_empty() && built.shared_vertex_index.is_empty());
+        // both triangles have the box of the whole square, so their centres tie and the input order stands; each triangle
+        // names its vertices by their slots of first use
+        assert_eq!(built.primitives, [[0, 1, 2, 2], [1, 3, 2, 2]]);
+        // the codec spans the unit box on x and y and is flat on z: x in the low 11 bits, y in the next 11, z in the top 10
+        assert_eq!(built.packed_vertices, [0, 2047, 2047 << 11, 2047 | 2047 << 11]);
+        assert_eq!(section.codec[..3], [0.0, 0.0, 0.0]);
+        assert!(
+            (section.codec[3] - 1.0 / 2047.0).abs() < 1e-9 && (section.codec[4] - 1.0 / 2047.0).abs() < 1e-9
+        );
+        assert_eq!(section.codec[5], 0.0);
+        // keys 0 and 2, so the largest key is 2 and the key width is the bit length of 3
+        assert_eq!(built.triangle_keys, [Some(0), Some(2)]);
+        assert_eq!(
+            (built.num_primitive_keys, built.max_key_value, built.bits_per_key),
+            (2, 2, 2)
+        );
+        // one run covers both primitives
+        assert_eq!(built.data_runs, [(0xffff, 0, 2)]);
+        // a section tree of three nodes (an inner node and two leaves), a mesh tree of one leaf
+        assert_eq!(section.nodes.len(), 3 * 4);
+        assert_eq!(built.mesh_nodes.len(), 5);
+        // the domain is the vertex box grown by the radius, rounded outward
+        assert!(built.domain[0].iter().all(|&x| x <= -0.01 && x > -0.0101));
+        assert!(built.domain[1][0] >= 1.01 && built.domain[1][0] < 1.0101);
+        // the simd tree: both primitives as leaves of one node, exact boxes
+        assert_eq!(built.simd_leaves.len(), 2);
+        assert_eq!(built.simd_leaves[0].key, 0);
+        assert_eq!(built.simd_leaves[1].key, 2);
+        let decoded = built.triangles().unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].key, 0);
+        assert_eq!(decoded[0].vertices[0], [0.0, 0.0, 0.0]);
+        assert_eq!(decoded[1].key, 2);
+    }
+
     #[test]
     fn a_vertex_is_stored_once_while_it_stays_on_the_page() {
         let mut array = SharedArray::new(100);
