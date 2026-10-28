@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-10-28)
 
 Cloth (`cloth`) reads the whole `hclClothData`: what a cloth runtime needs, checked on every distinct tagfile with cloth
 of both installs (149 Sekiro, 814 Elden Ring), none refused (`tests/cloth_corpus.rs` asserts the counts; a generic
