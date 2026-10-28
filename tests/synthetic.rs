@@ -18,12 +18,18 @@ fn packed(value: u32) -> Vec<u8> {
         vec![0xc0 | ((value >> 16) as u8), (value >> 8) as u8, value as u8]
     }
 }
+/// A PTCH record: a type index and the DATA offsets of its stored references.
+type Patch<'a> = (u32, &'a [u32]);
 fn fixture() -> Vec<u8> {
     fixture_with(b"20160200", packed(3))
 }
 /// The fixture with another SDK version and Root's packed member counts (fields in the low 16 bits, reflection
 /// properties above).
 fn fixture_with(sdk: &[u8; 8], root_counts: Vec<u8>) -> Vec<u8> {
+    fixture_patched(sdk, root_counts, &[])
+}
+/// The fixture with a PTCH section of `patches` (type index, DATA offsets of the stored references), as given.
+fn fixture_patched(sdk: &[u8; 8], root_counts: Vec<u8>, patches: &[Patch]) -> Vec<u8> {
     let strings = b"Root\0uint\0Pointer\0Array\0".to_vec();
     let names = vec![5, 0, 0, 1, 0, 2, 0, 3, 0];
     // Root{u32 value @0; pointer @8; array @16}, uint, ptr<uint>, array<ptr>.
@@ -59,7 +65,19 @@ fn fixture_with(sdk: &[u8; 8], root_counts: Vec<u8>) -> Vec<u8> {
     let mut root = section(b"SDKV", true, sdk.to_vec());
     root.extend(section(b"DATA", true, data));
     root.extend(section(b"TYPE", false, types));
-    root.extend(section(b"INDX", false, section(b"ITEM", true, items)));
+    let mut index = section(b"ITEM", true, items);
+    if !patches.is_empty() {
+        let mut table = Vec::new();
+        for (type_index, offsets) in patches {
+            table.extend(type_index.to_le_bytes());
+            table.extend(u32::try_from(offsets.len()).expect("a few offsets").to_le_bytes());
+            for offset in *offsets {
+                table.extend(offset.to_le_bytes());
+            }
+        }
+        index.extend(section(b"PTCH", true, table));
+    }
+    root.extend(section(b"INDX", false, index));
     section(b"TAG0", false, root)
 }
 #[test]
@@ -327,5 +345,42 @@ fn a_reference_slot_holds_only_its_item_index() {
         // the index alone reads
         let tag = Tagfile::read(&bytes, None).expect("fixture");
         assert!(tag.root().unwrap().field(member).is_ok());
+    }
+}
+
+/// The patch records of a tagfile: one a slot type (the pointer type 3, the array type 4 here), the types ascending
+/// and each record's offsets strictly ascending. The offsets are the stored references: the root's pointer (8) and
+/// array (16) and the two pointers of item 3 (40, 48).
+#[test]
+fn patch_records_ascend_by_type_and_by_offset() {
+    let good: &[Patch] = &[(3, &[8, 40, 48]), (4, &[16])];
+    let bytes = fixture_patched(b"20160200", packed(3), good);
+    let tag = Tagfile::read(&bytes, None).expect("patched fixture");
+    assert_eq!(tag.patches, vec![(3, vec![8, 40, 48]), (4, vec![16])]);
+    // no PTCH section, or a record with no offsets, reads
+    assert!(
+        Tagfile::read(&fixture(), None)
+            .expect("fixture")
+            .patches
+            .is_empty()
+    );
+    assert!(
+        Tagfile::read(
+            &fixture_patched(b"20160200", packed(3), &[(3, &[]), (4, &[16])]),
+            None
+        )
+        .is_ok()
+    );
+    let refused: [(&[Patch], &str); 4] = [
+        // the types descend, or one type has two records
+        (&[(4, &[16]), (3, &[8])], "patch record of type 3 after type 4"),
+        (&[(3, &[8]), (3, &[40])], "patch record of type 3 after type 3"),
+        // the offsets of a record descend or repeat
+        (&[(3, &[40, 8])], "patch offset 0x8 after 0x28"),
+        (&[(3, &[8, 8])], "patch offset 0x8 after 0x8"),
+    ];
+    for (patches, want) in refused {
+        let error = Tagfile::read(&fixture_patched(b"20160200", packed(3), patches), None).unwrap_err();
+        assert!(error.detail.contains(want), "{want}: {error}");
     }
 }

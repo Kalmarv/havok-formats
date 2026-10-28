@@ -86,7 +86,10 @@ impl TypeFlags {
 pub struct Field {
     /// The member's name.
     pub name: String,
-    /// The member's stored flags.
+    /// The member's stored flags. The 816,249 member records of the distinct type tables of Sekiro (149,035) and Elden
+    /// Ring (667,214) store `0x20` to `0x25`: `0x20` is set on every record, and with it every combination of `0x01`,
+    /// `0x02` and `0x04` occurs but `0x02` together with `0x04`. A record without `0x20`, or with a bit outside `0x27`,
+    /// is refused. What `0x01`, `0x02` and `0x04` mean is not told by the data.
     pub flags: u64,
     /// Byte offset within the object.
     pub offset: usize,
@@ -318,9 +321,16 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
                 return Err(c.error("unsupported or invalid member count"));
             }
             for _ in 0..n {
+                let name = string(&field_names, &mut c)?;
+                let flags = c.packed()?;
+                if flags & FIELD_FLAGS_PRESENT == 0 || flags & !FIELD_FLAGS_KNOWN != 0 {
+                    return Err(c.error(format!(
+                        "member {name:?} has flags {flags:#x}; every member record has {FIELD_FLAGS_PRESENT:#x} set and none sets a bit outside {FIELD_FLAGS_KNOWN:#x}"
+                    )));
+                }
                 t.fields.push(Field {
-                    name: string(&field_names, &mut c)?,
-                    flags: c.packed()?,
+                    name,
+                    flags,
                     offset: c.index()?,
                     type_index: c.index()?,
                 });
@@ -365,6 +375,12 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
     }
     if let Some(i) = parent_cycle(&types) {
         return Err(invalid(section.offset, format!("type {i} inherits from itself")));
+    }
+    if let Some((i, kind)) = subtype_on_wrong_kind(&types) {
+        return Err(invalid(
+            section.offset,
+            format!("type {i} stores a subtype but is of kind {kind}, not a pointer (6) or an array (8)"),
+        ));
     }
     check_hashes(&types, section.offset)?;
     Ok(types)
@@ -626,6 +642,34 @@ fn check_hashes(types: &[Type], at: usize) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The bits a member record's flags word has: `0x20` is set on every member of both installs.
+const FIELD_FLAGS_PRESENT: u64 = 0x20;
+/// The bits a member record's flags word may have: `0x20` and the low three, whose values the tables use in every
+/// combination but `0x02` with `0x04`.
+const FIELD_FLAGS_KNOWN: u64 = 0x27;
+
+/// The first type that stores a subtype though its kind (the low four bits of its format word, or its nearest parent's;
+/// 16 when none has a format) is not a pointer (6) or an array (8), with that kind. Every type that stores one is
+/// one of the two in the tables of both installs (Sekiro 25,275 pointers and 20,192 arrays; Elden Ring 111,486 and
+/// 91,351). The parent chains must end: [`parent_cycle`] has checked.
+fn subtype_on_wrong_kind(types: &[Type]) -> Option<(usize, u64)> {
+    types.iter().enumerate().skip(1).find_map(|(i, t)| {
+        t.subtype?;
+        let mut at = Some(t);
+        let mut format = None;
+        for _ in 0..types.len() {
+            let Some(current) = at else { break };
+            if let Some(f) = current.format {
+                format = Some(f);
+                break;
+            }
+            at = types.get(current.parent).filter(|_| current.parent != 0);
+        }
+        let kind = format.map_or(16, |f| f & 15);
+        (kind != 6 && kind != 8).then_some((i, kind))
+    })
 }
 
 /// A type on a cycle of parents, if there is one: every type's parent chain must end at the null type 0. Linear in the
@@ -939,6 +983,59 @@ mod tests {
         (5, 0xb4d8c9bd),
         (6, 0xadf001aa),
     ];
+
+    /// `mini()` with the flags of its member `a` (Base's) changed.
+    fn with_member_flags(flags: u64) -> Vec<Spec> {
+        let mut specs = mini();
+        specs[1].fields[0].1 = flags;
+        specs
+    }
+
+    #[test]
+    fn member_flags_have_bit_0x20_and_none_outside_0x27() {
+        for flags in [0x20, 0x21, 0x22, 0x23, 0x24, 0x25] {
+            let types = read(&type_section(&with_member_flags(flags), &[])).expect("flags in the data");
+            assert_eq!(types[2].fields[0].flags, flags);
+        }
+        for flags in [0, 1, 0x05, 0x28, 0x30, 0x40, 0xA0, 0x100] {
+            let error = read(&type_section(&with_member_flags(flags), &[])).unwrap_err();
+            assert!(
+                error.detail.contains(&format!("has flags {flags:#x}")),
+                "{flags:#x}: {error}"
+            );
+        }
+    }
+
+    /// A type that stores a subtype is a pointer (6) or an array (8), by its own format or its nearest parent's.
+    #[test]
+    fn a_subtype_belongs_to_a_pointer_or_an_array() {
+        let subtyped = |format: Option<u64>, parent: usize| Spec {
+            name: "Subtyped",
+            parent,
+            format,
+            subtype: Some(1),
+            ..Spec::default()
+        };
+        let table = |extra: Spec| {
+            let mut specs = mini();
+            specs.push(extra);
+            read(&type_section(&specs, &[]))
+        };
+        // its own format: a pointer (6) or an array (8, also a fixed one with bits above)
+        assert!(table(subtyped(Some(6), 0)).is_ok());
+        assert!(table(subtyped(Some(0x28 | 8 << 8), 0)).is_ok());
+        // inherited: type 4 is the array `hkArray`; type 2 is a class
+        assert!(table(subtyped(None, 4)).is_ok());
+        // another kind, own or inherited, or none at all
+        for (format, parent, kind) in [(Some(7), 0, 7), (Some(0x8002), 0, 2), (None, 2, 7), (None, 0, 16)] {
+            let error = table(subtyped(format, parent)).unwrap_err();
+            assert!(
+                error.detail.contains("type 7 stores a subtype")
+                    && error.detail.contains(&format!("of kind {kind}")),
+                "{error}"
+            );
+        }
+    }
 
     #[test]
     fn crc_chains_continue_the_crc_32() {

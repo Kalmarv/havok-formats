@@ -22,12 +22,15 @@ struct Options {
     local_particle: u32,
     /// The local range constraint set's `shapeType`.
     shape_type: u32,
+    /// The cloth data's `targetPlatform`.
+    target_platform: u32,
 }
 const FILES: Options = Options {
     wide: false,
     link_b: 0,
     local_particle: 0,
     shape_type: 1,
+    target_platform: 2,
 };
 
 fn fixture(sdk: &[u8; 8], options: Options) -> Built<Vec<u8>> {
@@ -66,7 +69,11 @@ fn fixture(sdk: &[u8; 8], options: Options) -> Built<Vec<u8>> {
                 ("totalMass", 76, 2),
             ],
         ), // 10
-        record("hclClothData", 24, vec![("name", 0, 3), ("simClothDatas", 8, 6)]), // 11
+        record(
+            "hclClothData",
+            32,
+            vec![("name", 0, 3), ("simClothDatas", 8, 6), ("targetPlatform", 24, 1)],
+        ), // 11
         record(
             "hkaSkeleton",
             88,
@@ -140,9 +147,11 @@ fn fixture(sdk: &[u8; 8], options: Options) -> Built<Vec<u8>> {
             ],
         ), // 27
     ];
-    let mut data = vec![0; 472];
+    // the cloth data object comes last: it is 32 bytes
+    let cloth_data = 472;
+    let mut data = vec![0; cloth_data + 32];
     for (offset, index) in [
-        (8, 2u64),
+        (cloth_data + 8, 2u64),
         (24, 3),
         (32, 3),
         (48, 6),
@@ -181,6 +190,7 @@ fn fixture(sdk: &[u8; 8], options: Options) -> Built<Vec<u8>> {
         data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
     for (offset, value) in [
+        (cloth_data + 24, options.target_platform),
         (312, 17u32),
         (316, 23),
         (328, 0x0102_0304),
@@ -202,7 +212,7 @@ fn fixture(sdk: &[u8; 8], options: Options) -> Built<Vec<u8>> {
         data[offset..offset + isz].copy_from_slice(&value.to_le_bytes()[..isz]);
     }
     let items = [
-        (11u32, 0u32, 1u32, false),
+        (11u32, 472u32, 1u32, false),
         (4, 24, 2, true),
         (10, 40, 1, false),
         (4, 120, 2, true),
@@ -244,6 +254,20 @@ fn cloth_data_reads_both_eight_byte_sim_references() -> Built<()> {
         let physics = cloth::read(&tag).unwrap();
         assert_eq!(physics.cloths.len(), 1);
         assert_eq!(physics.cloths[0].sim_cloths.len(), 2);
+        assert_eq!(physics.cloths[0].target_platform, 2);
+    }
+    Ok(())
+}
+
+#[test]
+fn target_platform_is_kept_as_stored() -> Built<()> {
+    for value in [0, 1, 7, u32::MAX] {
+        let physics = read(Options {
+            target_platform: value,
+            ..FILES
+        })?
+        .unwrap();
+        assert_eq!(physics.cloths[0].target_platform, value);
     }
     Ok(())
 }

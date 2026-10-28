@@ -161,15 +161,29 @@ impl<'a> Tagfile<'a> {
         }
         if let Some(&ps) = patch_sections.first() {
             let mut c = Cursor::new(*ps);
+            let mut previous_type = 0;
             while c.position < c.bytes.len() {
                 let ti = c.u32_le()? as usize;
                 let count = c.u32_le()? as usize;
                 if ti == 0 || ti >= types.len() {
                     return Err(c.error("patch type out of bounds"));
                 }
-                let mut offsets = Vec::new();
+                // one record a type, the types ascending (type 0 is not patched, so 0 starts the order)
+                if ti <= previous_type {
+                    return Err(c.error(format!(
+                        "patch record of type {ti} after type {previous_type}: the records ascend by type"
+                    )));
+                }
+                previous_type = ti;
+                let mut offsets: Vec<usize> = Vec::new();
                 for _ in 0..count {
                     let offset = c.u32_le()? as usize;
+                    if offsets.last().is_some_and(|&last| offset <= last) {
+                        return Err(c.error(format!(
+                            "patch offset {offset:#x} after {:#x}: the offsets of a record ascend strictly",
+                            offsets.last().copied().unwrap_or_default()
+                        )));
+                    }
                     let index = data
                         .payload
                         .get(offset..)

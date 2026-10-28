@@ -138,6 +138,9 @@ pub struct SimCloth {
 pub struct Cloth {
     /// `name`.
     pub name: String,
+    /// `targetPlatform` (`hkEnum<Platform, hkUint32>`), as stored: 2 in all 610 `hclClothData` of Sekiro's and all 2,692 of
+    /// Elden Ring's distinct tagfiles. The files do not say what the value means.
+    pub target_platform: u32,
     /// `simClothDatas`.
     pub sim_cloths: Vec<SimCloth>,
 }
@@ -355,6 +358,8 @@ pub fn read(tag: &Tagfile<'_>) -> Result<Physics> {
     for data in objects(tag, "hclClothData")? {
         out.cloths.push(Cloth {
             name: data.field("name")?.string()?,
+            target_platform: u32::try_from(data.field("targetPlatform")?.unsigned()?)
+                .map_err(|_| invalid(data.at(), "targetPlatform outside u32"))?,
             sim_cloths: list(data.field("simClothDatas")?, |s| sim_cloth(s.dereference()?))?,
         });
     }
