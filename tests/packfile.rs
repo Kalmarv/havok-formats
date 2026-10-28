@@ -3,7 +3,10 @@
 //! table in `src/packfile/physics.rs` cites runs in primase, outside this repository:
 //! <https://github.com/Kalmarv/primase/tree/main/worlds/shred/tests/collision_disc.rs>.
 #![allow(clippy::unwrap_used)]
-use havok_formats::packfile::physics::{self, ConvexVertices, ExtendedMesh, MOTION_FIXED, RigidBody, Shape};
+use havok_formats::packfile::physics::{
+    self, ConvexVertices, ExtendedMesh, ListChild, MOTION_BOX_INERTIA, MOTION_FIXED, MoppCode, RigidBody,
+    Shape,
+};
 use havok_formats::packfile::{CLASS_SIGNATURES, Packfile};
 
 /// Builds a packfile: class names (each with the signature [`CLASS_SIGNATURES`] lists, or `0x12345678` for a name it
@@ -57,6 +60,14 @@ impl Builder {
     /// A pointer slot with a global fixup.
     fn global(&mut self, at: usize, to: usize) {
         self.global.push((at as u32, to as u32));
+    }
+    /// Point the fixup of the pointer slot at `at` somewhere else.
+    fn retarget(&mut self, at: usize, to: usize) {
+        for (src, dst) in self.local.iter_mut().chain(&mut self.global) {
+            if *src as usize == at {
+                *dst = to as u32;
+            }
+        }
     }
     /// An hkArray header at `at`, its data at `to` (local fixup), `len` elements.
     fn array(&mut self, at: usize, to: Option<usize>, len: u32) {
@@ -147,14 +158,18 @@ impl Builder {
 
 /// Root + a fixed rigid body (rotation 90 degrees about +Y, translation (10,20,30)) + its box shape.
 fn scene() -> Vec<u8> {
-    let mut b = Builder::new(0x230);
+    scene_builder().build()
+}
+
+fn scene_builder() -> Builder {
+    let mut b = Builder::new(0x340);
     b.object(0, "hkRootLevelContainer");
     b.object(0x40, "hkpRigidBody");
-    b.object(0x200, "hkpBoxShape");
-    b.global(0x40 + 0x10, 0x200);
+    b.object(0x300, "hkpBoxShape");
+    b.global(0x40 + 0x10, 0x300);
     b.u32(0x40 + 0x14, 0xFFFF_FFFF);
-    b.local(0x40 + 0x74, 0x1E0);
-    b.data[0x1E0..0x1E5].copy_from_slice(b"Box1\0");
+    b.local(0x40 + 0x74, 0x2C0);
+    b.data[0x2C0..0x2C5].copy_from_slice(b"Box1\0");
     b.data[0x40 + 0x8C] = 1;
     b.f32(0x40 + 0x90, 0.5);
     b.f32(0x40 + 0x94, 0.25);
@@ -166,9 +181,9 @@ fn scene() -> Vec<u8> {
     b.floats(0x40 + 0x100, &[0.0, 1.0, 0.0]);
     b.floats(0x40 + 0x110, &[1.0, 0.0, 0.0]);
     b.floats(0x40 + 0x120, &[10.0, 20.0, 30.0]);
-    b.f32(0x200 + 0x10, 0.05);
-    b.floats(0x200 + 0x20, &[1.0, 2.0, 3.0]);
-    b.build()
+    b.f32(0x300 + 0x10, 0.05);
+    b.floats(0x300 + 0x20, &[1.0, 2.0, 3.0]);
+    b
 }
 
 #[test]
@@ -186,14 +201,14 @@ fn rigid_body_and_box() {
     assert_eq!(physics::rigid_bodies(&p), vec![0x40]);
     let body = RigidBody::read(&p, 0x40).unwrap();
     assert_eq!(body.name, "Box1");
-    assert_eq!(body.shape, 0x200);
+    assert_eq!(body.shape, 0x300);
     assert_eq!(body.motion_type, MOTION_FIXED);
     assert_eq!((body.friction, body.restitution), (0.5, 0.25));
     assert_eq!((body.collision_filter_info, body.storage_index), (7, 3));
     // world = 1*c0 + 2*c1 + 3*c2 + t = (0,0,-1) + (0,2,0) + (3,0,0) + (10,20,30)
     assert_eq!(body.to_world([1.0, 2.0, 3.0]), [13.0, 22.0, 29.0]);
     assert_eq!(
-        Shape::read(&p, 0x200).unwrap(),
+        Shape::read(&p, 0x300).unwrap(),
         Shape::Box {
             radius: 0.05,
             half_extents: [1.0, 2.0, 3.0]
@@ -203,16 +218,21 @@ fn rigid_body_and_box() {
 
 /// A shape-only fixture: an extended mesh with one subpart (the unit quad as two triangles).
 fn mesh() -> Vec<u8> {
+    mesh_builder().build()
+}
+
+fn mesh_builder() -> Builder {
     let mut b = Builder::new(0x400);
     b.object(0, "hkRootLevelContainer");
     b.object(0x40, "hkpStorageExtendedMeshShape");
     b.object(0x200, "hkpStorageExtendedMeshShapeMeshSubpartStorage");
-    let sub = 0x140; // one 96-byte subpart (trailing data of the shape)
+    let sub = 0x150; // one 96-byte subpart (the shape's trailing data, after its 0x110-byte body)
     b.floats(0x40 + 0x90, &[0.5, 0.0, 0.5]);
     b.floats(0x40 + 0xA0, &[0.5, 0.0, 0.5]);
     b.u32(0x40 + 0xB0, 12);
     b.array(0x40 + 0xB4, Some(sub), 1);
     b.array(0x40 + 0xC0, None, 0);
+    b.array(0x40 + 0xFC, None, 0);
     b.array(0x40 + 0xCC, Some(0x1C0), 2);
     b.array(0x40 + 0xF0, Some(0x1D0), 1);
     b.global(0x1D0, 0x200);
@@ -251,7 +271,7 @@ fn mesh() -> Vec<u8> {
     b.u32(0x2F8, 0xDEAD_BEEF); // userData, kept as stored
     b.u16(0x320, 0);
     b.u16(0x322, 0);
-    b.build()
+    b
 }
 
 #[test]
@@ -279,7 +299,11 @@ fn extended_mesh() {
 }
 
 fn convex() -> Vec<u8> {
-    let mut b = Builder::new(0x200);
+    convex_builder().build()
+}
+
+fn convex_builder() -> Builder {
+    let mut b = Builder::new(0x300);
     b.object(0, "hkRootLevelContainer");
     b.object(0x40, "hkpConvexVerticesShape");
     b.f32(0x40 + 0x10, 0.05);
@@ -299,7 +323,7 @@ fn convex() -> Vec<u8> {
         }
     }
     b.floats(0x180, &[0.0, 1.0, 0.0, -14.0]);
-    b.build()
+    b
 }
 
 #[test]
@@ -428,7 +452,7 @@ fn pointer_and_array_checks() {
     let p = Packfile::read(&bytes).unwrap();
     let e = RigidBody::read(&p, 0x40).unwrap_err().to_string();
     assert!(e.contains("no fixup"), "{e}");
-    // an array longer than its capacity
+    // an array whose capacity word is not its size or 0x80000000
     let mut b = Builder::new(0x400);
     b.object(0, "hkRootLevelContainer");
     b.object(0x40, "hkpStorageExtendedMeshShape");
@@ -439,7 +463,7 @@ fn pointer_and_array_checks() {
     let bytes = b.build();
     let p = Packfile::read(&bytes).unwrap();
     let e = ExtendedMesh::read(&p, 0x40).unwrap_err().to_string();
-    assert!(e.contains("exceeds its capacity"), "{e}");
+    assert!(e.contains("array of 5 has capacity word 0x80000001"), "{e}");
 }
 
 #[test]
@@ -485,7 +509,7 @@ fn mesh_refusals() {
     assert!(e.contains("embedded subpart"), "{e}");
     // a subpart word changed in subpart 0 and in its embedded copy (at shape + 0x20), so the copy still holds
     let subpart_refusal = |at: usize, v: u32| {
-        let mut x = patch(0x140 + at, v);
+        let mut x = patch(0x150 + at, v);
         x[data_start + 0x60 + at..data_start + 0x60 + at + 4].copy_from_slice(&v.to_be_bytes());
         let p = Packfile::read(&x).unwrap();
         ExtendedMesh::read(&p, 0x40).unwrap_err().to_string()
@@ -527,4 +551,530 @@ fn non_finite_floats_are_errors() {
             .to_string()
             .contains("non-finite")
     );
+}
+
+/// The error text of reading `read` from the packfile `bytes` (empty when it reads).
+fn refusal<T>(bytes: &[u8], read: impl FnOnce(&Packfile<'_>) -> havok_formats::Result<T>) -> String {
+    let p = Packfile::read(bytes).unwrap();
+    match read(&p) {
+        Ok(_) => String::new(),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+fn section_header_byte_19_and_the_bytes_after_the_tag() {
+    let good = scene();
+    // the first section header is at 0x40: tag `__classnames__` (14 bytes), its NUL, then zeros up to byte 19 = 0xFF
+    assert_eq!(&good[0x40..0x40 + 14], b"__classnames__");
+    assert_eq!(good[0x40 + 19], 0xFF);
+    let patch = |at: usize, v: u8| {
+        let mut b = good.clone();
+        b[at] = v;
+        b
+    };
+    let e = refuse(&patch(0x40 + 19, 0));
+    assert!(
+        e.contains("byte 19 is 0x00, not 0xFF") && e.contains("0x53"),
+        "{e}"
+    );
+    let e = refuse(&patch(0x40 + 16, 1));
+    assert!(
+        e.contains("followed by bytes that are not zero") && e.contains("0x4e"),
+        "{e}"
+    );
+    // a tag that fills the 19 bytes has no NUL and no bytes after it
+    let mut b = good.clone();
+    b[0x40 + 96..0x40 + 115].copy_from_slice(b"__datadatadatadata_");
+    assert!(refuse(&b).contains("exactly one __data__"));
+}
+
+#[test]
+fn array_capacity_word_is_the_size_with_the_flag() {
+    let read = |tweak: &dyn Fn(&mut Builder)| {
+        let mut b = mesh_builder();
+        tweak(&mut b);
+        let bytes = b.build();
+        let p = Packfile::read(&bytes).unwrap();
+        p.array_header(0x40 + 0xCC)
+            .map(|a| (a.data, a.len))
+            .map_err(|e| e.to_string())
+    };
+    assert_eq!(read(&|_| {}), Ok((Some(0x1C0), 2)));
+    // the capacity word of the welding array is 0x80000002: each other value is refused
+    for word in [2, 0x8000_0003, 0x8000_0001, 0xC000_0002, 0x4000_0002, 0x8000_0000] {
+        let e = read(&|b| b.u32(0x40 + 0xCC + 8, word)).unwrap_err();
+        assert!(
+            e.contains(&format!("capacity word {word:#010x}")) && e.contains("array of 2"),
+            "{word:#x}: {e}"
+        );
+    }
+    // an empty array stores 0x80000000 too, and has no fixup
+    let empty = |tweak: &dyn Fn(&mut Builder)| {
+        let mut b = mesh_builder();
+        tweak(&mut b);
+        let bytes = b.build();
+        let p = Packfile::read(&bytes).unwrap();
+        p.array_header(0x40 + 0xC0)
+            .map(|a| (a.data, a.len))
+            .map_err(|e| e.to_string())
+    };
+    assert_eq!(empty(&|_| {}), Ok((None, 0)));
+    let e = empty(&|b| b.u32(0x40 + 0xC0 + 8, 0)).unwrap_err();
+    assert!(e.contains("capacity word 0x00000000"), "{e}");
+    let e = empty(&|b| b.array(0x40 + 0xC0, Some(0x1E0), 0)).unwrap_err();
+    assert!(e.contains("empty array has a fixup"), "{e}");
+    // a non-empty array needs its fixup
+    let e = read(&|b| b.local.retain(|(src, _)| *src != 0x40 + 0xCC)).unwrap_err();
+    assert!(e.contains("non-empty array has no data"), "{e}");
+}
+
+#[test]
+fn a_pointer_slot_with_a_fixup_holds_zero() {
+    let mut b = scene_builder();
+    b.u32(0x40 + 0x10, 0x300);
+    let e = refusal(&b.build(), |p| RigidBody::read(p, 0x40));
+    assert!(e.contains("with a fixup holds 0x300, not zero"), "{e}");
+    // without the fixup it is the older refusal
+    let mut b = scene_builder();
+    b.global.clear();
+    b.u32(0x40 + 0x10, 0x300);
+    assert!(refusal(&b.build(), |p| RigidBody::read(p, 0x40)).contains("has no fixup"));
+}
+
+#[test]
+fn fixups_are_aligned() {
+    let base = || {
+        let mut b = Builder::new(0x200);
+        b.object(0, "hkRootLevelContainer");
+        b
+    };
+    let read = |b: &Builder| Packfile::read(&b.build()).err().map(|e| e.to_string());
+    assert_eq!(read(&base()), None);
+    let mut b = base();
+    b.local(0x80, 0x100);
+    b.global(0x84, 0x110);
+    b.object(0x140, "hkpBoxShape");
+    assert_eq!(read(&b), None);
+    // a local source, a global source: not on a 4-byte boundary
+    let mut b = base();
+    b.local(0x82, 0x100);
+    let e = read(&b).unwrap();
+    assert!(e.contains("local fixup source 0x82 is not 4-byte aligned"), "{e}");
+    let mut b = base();
+    b.global(0x81, 0x110);
+    let e = read(&b).unwrap();
+    assert!(
+        e.contains("global fixup source 0x81 is not 4-byte aligned"),
+        "{e}"
+    );
+    // a local target is a word; a global target is a 16-byte vector
+    let mut b = base();
+    b.local(0x80, 0x102);
+    let e = read(&b).unwrap();
+    assert!(
+        e.contains("local fixup target 0x102 is not 4-byte aligned"),
+        "{e}"
+    );
+    let mut b = base();
+    b.global(0x84, 0x118);
+    let e = read(&b).unwrap();
+    assert!(
+        e.contains("global fixup target 0x118 is not 16-byte aligned"),
+        "{e}"
+    );
+    // an object starts on a 16-byte boundary
+    let mut b = base();
+    b.object(0x148, "hkpBoxShape");
+    let e = read(&b).unwrap();
+    assert!(e.contains("object is not 16-byte aligned"), "{e}");
+}
+
+/// The fixed body of [`scene`], made dynamic: box inertia, mass 2, and `tweak` applied to its bytes.
+fn dynamic_body(tweak: impl FnOnce(&mut Builder)) -> Vec<u8> {
+    let mut b = scene_builder();
+    b.data[0x40 + 0xE8] = MOTION_BOX_INERTIA;
+    b.data[0x40 + 0x2A] = 4;
+    b.f32(0x40 + 0x5C, 0.25);
+    b.f32(0x40 + 0x190, 3.5);
+    b.f32(0x40 + 0x194, 0.0);
+    b.f32(0x40 + 0x198, 0.05);
+    b.floats(0x40 + 0x1A0, &[0.5, 0.25, 0.125]);
+    b.f32(0x40 + 0x1AC, 0.5);
+    b.floats(0x40 + 0x170, &[0.1, 0.2, 0.3]);
+    b.u16(0x40 + 0x1FE, 0x3F80);
+    tweak(&mut b);
+    b.build()
+}
+
+#[test]
+fn a_body_reads_its_entity_and_motion_members() {
+    let bytes = dynamic_body(|_| {});
+    let p = Packfile::read(&bytes).unwrap();
+    let body = RigidBody::read(&p, 0x40).unwrap();
+    assert_eq!(body.motion_type, MOTION_BOX_INERTIA);
+    assert_eq!(body.quality_type, 4);
+    assert_eq!(body.allowed_penetration_depth, 0.25);
+    assert_eq!(body.object_radius, 3.5);
+    assert_eq!((body.linear_damping, body.angular_damping), (0.0, 0.05));
+    assert_eq!(body.inverse_inertia, [0.5, 0.25, 0.125]);
+    assert_eq!(body.inverse_mass, 0.5);
+    assert_eq!(body.center_of_mass_local, [0.1, 0.2, 0.3]);
+    assert_eq!(body.gravity_factor, 1.0);
+    // the fixed body of the scene stores zeros for all of the mass members, and the quality type 0
+    let fixed = scene();
+    let p = Packfile::read(&fixed).unwrap();
+    let body = RigidBody::read(&p, 0x40).unwrap();
+    assert_eq!(
+        (body.inverse_inertia, body.inverse_mass, body.quality_type),
+        ([0.0; 3], 0.0, 0)
+    );
+}
+
+#[test]
+fn a_body_that_is_not_at_rest_or_whose_mass_disagrees_with_its_motion_is_refused() {
+    let refused = |bytes: Vec<u8>| refusal(&bytes, |p| RigidBody::read(p, 0x40));
+    // a fixed body with a mass, or with one inverse inertia lane
+    let mut b = scene_builder();
+    b.f32(0x40 + 0x1AC, 1.0);
+    assert!(refused(b.build()).contains("a fixed body has inverse inertia or inverse mass"));
+    let mut b = scene_builder();
+    b.f32(0x40 + 0x1A4, 1.0);
+    assert!(refused(b.build()).contains("a fixed body has inverse inertia or inverse mass"));
+    // a dynamic body needs every one of the four positive
+    for at in [0x1A0, 0x1A4, 0x1A8, 0x1AC] {
+        let e = refused(dynamic_body(|b| b.f32(0x40 + at, 0.0)));
+        assert!(
+            e.contains("a dynamic body has no positive inverse inertia and inverse mass"),
+            "{at:#x}: {e}"
+        );
+    }
+    // velocities: any lane of either
+    for at in [0x1B0, 0x1B8, 0x1BC, 0x1C0, 0x1C4, 0x1CC] {
+        let e = refused(dynamic_body(|b| b.f32(0x40 + at, 1.0)));
+        assert!(e.contains("velocity is not zero"), "{at:#x}: {e}");
+    }
+    // the swept transform of a body at rest: both centres and both rotations equal
+    for at in [0x130, 0x138] {
+        let e = refused(dynamic_body(|b| b.f32(0x40 + at, 1.0)));
+        assert!(e.contains("two centres of mass differ"), "{at:#x}: {e}");
+    }
+    for at in [0x150, 0x15C, 0x16C] {
+        let e = refused(dynamic_body(|b| b.f32(0x40 + at, 1.0)));
+        assert!(e.contains("two rotations differ"), "{at:#x}: {e}");
+    }
+    // the time lanes of the centres (the fourth lane) are not compared
+    let bytes = dynamic_body(|b| b.f32(0x40 + 0x13C, 1.0));
+    assert!(refused(bytes).is_empty());
+    let e = refused(dynamic_body(|b| b.u16(0x40 + 0x1FE, 0x7F80)));
+    assert!(e.contains("non-finite half"), "{e}");
+}
+
+#[test]
+fn an_extended_mesh_reads_its_trailing_members() {
+    let mut b = mesh_builder();
+    b.data[0x40 + 0xD8] = 1;
+    b.u32(0x40 + 0xDC, 0x30);
+    b.u32(0x40 + 0xE0, 1);
+    b.f32(0x40 + 0xE4, 0.001);
+    b.u32(0x40 + 0x08, 1);
+    let bytes = b.build();
+    let p = Packfile::read(&bytes).unwrap();
+    let m = ExtendedMesh::read(&p, 0x40).unwrap();
+    assert_eq!(
+        (
+            m.welding_type,
+            m.default_collision_filter_info,
+            m.cached_num_child_shapes,
+            m.triangle_radius,
+            m.user_data
+        ),
+        (1, 0x30, 1, 0.001, 1)
+    );
+    // a cached count equal to the triangle count is allowed, one above it is not
+    let mut b = mesh_builder();
+    b.u32(0x40 + 0xE0, 2);
+    assert!(refusal(&b.build(), |p| ExtendedMesh::read(p, 0x40)).is_empty());
+    let mut b = mesh_builder();
+    b.u32(0x40 + 0xE0, 3);
+    let e = refusal(&b.build(), |p| ExtendedMesh::read(p, 0x40));
+    assert!(
+        e.contains("cachedNumChildShapes 3 exceeds the 2 triangles"),
+        "{e}"
+    );
+    // the padding bytes of the two gaps
+    for (at, want) in [
+        (0xD9, "padding after weldingType"),
+        (0xDB, "padding after weldingType"),
+        (0xE8, "padding after triangleRadius"),
+        (0xEF, "padding after triangleRadius"),
+    ] {
+        let mut b = mesh_builder();
+        b.data[0x40 + at] = 1;
+        let e = refusal(&b.build(), |p| ExtendedMesh::read(p, 0x40));
+        assert!(e.contains(want), "{at:#x}: {e}");
+    }
+    // the shape storage array
+    let mut b = mesh_builder();
+    b.array(0x40 + 0xFC, Some(0x1E0), 1);
+    let e = refusal(&b.build(), |p| ExtendedMesh::read(p, 0x40));
+    assert!(e.contains("shape storage is not supported"), "{e}");
+    // the shape type word
+    let mut b = mesh_builder();
+    b.u32(0x40 + 0x0C, 1);
+    let e = refusal(&b.build(), |p| ExtendedMesh::read(p, 0x40));
+    assert!(e.contains("shape type word is not zero"), "{e}");
+}
+
+/// A convex shape of the five vertices of [`convex`] with a connectivity object holding `indices` cut by `counts`.
+fn connected(indices: &[u16], counts: &[u8]) -> Builder {
+    let mut b = convex_builder();
+    b.object(0x1C0, "hkpConvexVerticesConnectivity");
+    b.local(0x40 + 0x60, 0x1C0);
+    b.array(0x1C0 + 0x08, Some(0x200), u32::try_from(indices.len()).unwrap());
+    for (i, v) in indices.iter().enumerate() {
+        b.u16(0x200 + 2 * i, *v);
+    }
+    b.array(0x1C0 + 0x14, Some(0x220), u32::try_from(counts.len()).unwrap());
+    b.data[0x220..0x220 + counts.len()].copy_from_slice(counts);
+    b
+}
+
+#[test]
+fn a_convex_shape_reads_its_faces() {
+    let bytes = connected(&[0, 1, 2, 3, 4], &[5]).build();
+    let p = Packfile::read(&bytes).unwrap();
+    let c = ConvexVertices::read(&p, 0x40).unwrap();
+    assert_eq!(c.faces, vec![vec![0, 1, 2, 3, 4]]);
+    assert_eq!(c.planes.len(), 1);
+    assert_eq!(c.user_data, 0);
+    assert_eq!(
+        physics::census(&p).decoded.get("hkpConvexVerticesConnectivity"),
+        Some(&1)
+    );
+    // no connectivity pointer: no faces
+    let bytes = convex();
+    let p = Packfile::read(&bytes).unwrap();
+    assert!(ConvexVertices::read(&p, 0x40).unwrap().faces.is_empty());
+    // faces of different sizes keep their runs; two planes for two faces
+    let mut b = connected(&[0, 1, 2, 2, 3, 4], &[3, 3]);
+    b.array(0x40 + 0x54, Some(0x180), 2);
+    b.local
+        .remove(b.local.iter().position(|&(s, _)| s == 0x40 + 0x54).unwrap());
+    b.floats(0x190, &[1.0, 0.0, 0.0, -4.0]);
+    let bytes = b.build();
+    let p = Packfile::read(&bytes).unwrap();
+    let c = ConvexVertices::read(&p, 0x40).unwrap();
+    assert_eq!(c.faces, vec![vec![0, 1, 2], vec![2, 3, 4]]);
+    assert_eq!(c.planes.len(), 2);
+    // the user data word is kept
+    let mut b = convex_builder();
+    b.u32(0x40 + 0x08, 1);
+    let bytes = b.build();
+    let p = Packfile::read(&bytes).unwrap();
+    assert_eq!(ConvexVertices::read(&p, 0x40).unwrap().user_data, 1);
+}
+
+#[test]
+fn a_convex_shape_that_disagrees_with_its_connectivity_is_refused() {
+    let refused = |b: Builder| refusal(&b.build(), |p| ConvexVertices::read(p, 0x40));
+    // fewer planes than faces (one plane, two faces)
+    let e = refused(connected(&[0, 1, 2, 2, 3, 4], &[3, 3]));
+    assert!(e.contains("1 planes for 2 faces"), "{e}");
+    // an index past the five vertices
+    let e = refused(connected(&[0, 1, 2, 3, 5], &[5]));
+    assert!(e.contains("names a vertex the shape does not have"), "{e}");
+    // counts that use more or fewer indices than stored
+    let e = refused(connected(&[0, 1, 2, 3, 4], &[6]));
+    assert!(e.contains("use more vertex indices than are stored"), "{e}");
+    let e = refused(connected(&[0, 1, 2, 3, 4], &[4]));
+    assert!(e.contains("leave stored vertex indices unused"), "{e}");
+    // the connectivity pointer names another class
+    let mut b = connected(&[0, 1, 2, 3, 4], &[5]);
+    b.retarget(0x40 + 0x60, 0);
+    let e = refused(b);
+    assert!(e.contains("not a hkpConvexVerticesConnectivity"), "{e}");
+    // the slot at +0x50 has no fixup and holds zero; the bytes after the connectivity pointer are zero
+    let mut b = convex_builder();
+    b.local(0x40 + 0x50, 0x180);
+    assert!(refused(b).contains("slot at +0x50 has a fixup"));
+    for at in [0x64, 0x6F] {
+        let mut b = convex_builder();
+        b.data[0x40 + at] = 1;
+        assert!(refused(b).contains("the end of the shape is not zero"), "{at:#x}");
+    }
+    let mut b = convex_builder();
+    b.u32(0x40 + 0x0C, 4);
+    assert!(refused(b).contains("shape type word is not zero"));
+}
+
+/// A MOPP tree shape at 0x40 over a box (0x100), its code at 0x140 holding `[1, 2, 3, 4]` at `code_at`.
+fn mopp_builder(code_at: usize) -> Builder {
+    let mut b = Builder::new(0x200);
+    b.object(0, "hkRootLevelContainer");
+    b.object(0x40, "hkpMoppBvTreeShape");
+    b.object(0x100, "hkpBoxShape");
+    b.object(0x140, "hkpMoppCode");
+    b.global(0x40 + 0x14, 0x140);
+    b.global(0x40 + 0x34, 0x100);
+    b.floats(0x140 + 0x10, &[1.0, 2.0, 3.0]);
+    b.f32(0x140 + 0x1C, 4.0);
+    b.array(0x140 + 0x20, Some(code_at), 4);
+    b.data[code_at..code_at + 4].copy_from_slice(&[1, 2, 3, 4]);
+    b
+}
+
+#[test]
+fn a_mopp_shape_names_its_code() {
+    let bytes = mopp_builder(0x170).build();
+    let p = Packfile::read(&bytes).unwrap();
+    assert_eq!(
+        Shape::read(&p, 0x40).unwrap(),
+        Shape::Mopp {
+            child: 0x100,
+            code: 0x140
+        }
+    );
+    assert_eq!(
+        MoppCode::read(&p, 0x140).unwrap(),
+        MoppCode {
+            offset: [1.0, 2.0, 3.0],
+            scale: 4.0,
+            build_type: 0,
+            code: vec![1, 2, 3, 4]
+        }
+    );
+    assert_eq!(physics::census(&p).decoded.get("hkpMoppCode"), Some(&1));
+    // the build type is signed
+    let mut b = mopp_builder(0x170);
+    b.data[0x140 + 0x2C] = 0xFF;
+    let bytes = b.build();
+    let p = Packfile::read(&bytes).unwrap();
+    assert_eq!(MoppCode::read(&p, 0x140).unwrap().build_type, -1);
+}
+
+#[test]
+fn a_mopp_code_that_is_not_laid_out_as_stored_is_refused() {
+    let code = |b: Builder| refusal(&b.build(), |p| MoppCode::read(p, 0x140));
+    // the code does not follow the body
+    let e = code(mopp_builder(0x180));
+    assert!(e.contains("does not follow the 0x30-byte body"), "{e}");
+    for (at, want) in [
+        (0x00, "start of a MOPP code"),
+        (0x0F, "start of a MOPP code"),
+        (0x2D, "padding after buildType"),
+        (0x2F, "padding after buildType"),
+    ] {
+        let mut b = mopp_builder(0x170);
+        b.data[0x140 + at] = 1;
+        let e = code(b);
+        assert!(e.contains(want) && e.contains("is not zero"), "{at:#x}: {e}");
+    }
+    let mut b = mopp_builder(0x170);
+    b.f32(0x140 + 0x10, f32::INFINITY);
+    assert!(code(b).contains("non-finite"));
+    // the tree shape's code pointer names another class, or is null
+    let shape = |b: Builder| refusal(&b.build(), |p| Shape::read(p, 0x40));
+    let mut b = mopp_builder(0x170);
+    b.retarget(0x40 + 0x14, 0x100);
+    assert!(shape(b).contains("MOPP code is not a hkpMoppCode"));
+    let mut b = mopp_builder(0x170);
+    b.global.retain(|(src, _)| *src != 0x40 + 0x14);
+    assert!(shape(b).contains("MOPP code is null"));
+}
+
+fn capsule(tweak: &dyn Fn(&mut Builder)) -> Vec<u8> {
+    let mut b = Builder::new(0x100);
+    b.object(0, "hkRootLevelContainer");
+    b.object(0x40, "hkpCapsuleShape");
+    b.f32(0x40 + 0x10, 0.5);
+    b.floats(0x40 + 0x20, &[1.0, 2.0, 3.0, 0.5]);
+    b.floats(0x40 + 0x30, &[4.0, 5.0, 6.0, 0.5]);
+    tweak(&mut b);
+    b.build()
+}
+
+#[test]
+fn a_capsule_repeats_its_radius_in_the_w_lanes() {
+    let bytes = capsule(&|_| {});
+    let p = Packfile::read(&bytes).unwrap();
+    assert_eq!(
+        Shape::read(&p, 0x40).unwrap(),
+        Shape::Capsule {
+            radius: 0.5,
+            a: [1.0, 2.0, 3.0],
+            b: [4.0, 5.0, 6.0]
+        }
+    );
+    for at in [0x2C, 0x3C] {
+        let bytes = capsule(&|b| b.f32(0x40 + at, 0.25));
+        let e = refusal(&bytes, |p| Shape::read(p, 0x40));
+        assert!(e.contains("w lane is not the radius"), "{at:#x}: {e}");
+    }
+}
+
+fn list(tweak: &dyn Fn(&mut Builder)) -> Vec<u8> {
+    let mut b = Builder::new(0x300);
+    b.object(0, "hkRootLevelContainer");
+    b.object(0x40, "hkpListShape");
+    b.object(0x200, "hkpBoxShape");
+    b.object(0x240, "hkpSphereShape");
+    b.array(0x40 + 0x18, Some(0x100), 2);
+    b.global(0x100, 0x200);
+    b.u32(0x104, 0x0007_0007);
+    b.global(0x110, 0x240);
+    tweak(&mut b);
+    b.build()
+}
+
+#[test]
+fn a_list_shape_reads_its_child_records() {
+    let bytes = list(&|_| {});
+    let p = Packfile::read(&bytes).unwrap();
+    assert_eq!(
+        Shape::read(&p, 0x40).unwrap(),
+        Shape::List {
+            children: vec![
+                ListChild {
+                    shape: 0x200,
+                    collision_filter_info: 0x0007_0007
+                },
+                ListChild {
+                    shape: 0x240,
+                    collision_filter_info: 0
+                }
+            ]
+        }
+    );
+    for at in [0x108, 0x10C, 0x118, 0x11C] {
+        let bytes = list(&|b| b.u32(at, 1));
+        let e = refusal(&bytes, |p| Shape::read(p, 0x40));
+        assert!(
+            e.contains("list shape's child record is not zero"),
+            "{at:#x}: {e}"
+        );
+    }
+}
+
+#[test]
+fn every_shape_class_has_a_zero_type_word_and_a_user_data_word() {
+    for class in ["hkpBoxShape", "hkpSphereShape", "hkpCapsuleShape"] {
+        let make = |tweak: &dyn Fn(&mut Builder)| {
+            let mut b = Builder::new(0x100);
+            b.object(0, "hkRootLevelContainer");
+            b.object(0x40, class);
+            b.floats(0x40 + 0x20, &[1.0, 1.0, 1.0, 0.0]);
+            tweak(&mut b);
+            b.build()
+        };
+        let bytes = make(&|b| b.u32(0x40 + 0x08, 7));
+        let p = Packfile::read(&bytes).unwrap();
+        assert_eq!(physics::shape_user_data(&p, 0x40).unwrap(), 7, "{class}");
+        let bytes = make(&|b| b.u32(0x40 + 0x0C, 3));
+        let p = Packfile::read(&bytes).unwrap();
+        let e = physics::shape_user_data(&p, 0x40).unwrap_err().to_string();
+        assert!(e.contains("shape type word is not zero"), "{class}: {e}");
+        let e = Shape::read(&p, 0x40).unwrap_err().to_string();
+        assert!(e.contains("shape type word"), "{class}: {e}");
+    }
 }

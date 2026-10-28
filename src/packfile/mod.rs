@@ -15,7 +15,7 @@
 //! | `0x20`, `0x24` | class-name section index and the root's class-name offset | the class-name section; a listed name |
 //! | `0x28` | contents version, 16 bytes, NUL-terminated | `Havok-7.1.0-r1` |
 //! | `0x38`, `0x3C` | two filler words, kept in [`Packfile::filler`] | read, not interpreted (`0xFFFFFFFF` in every file) |
-//! | `0x40 + 48 i` | section header: tag (20 bytes), then `start, local, global, virtual, exports, imports, end` | in order, inside the file |
+//! | `0x40 + 48 i` | section header: tag (20 bytes: the name, NULs, and `0xFF` as byte 19), then `start, local, global, virtual, exports, imports, end` | in order, inside the file |
 //!
 //! In version 7 the two words at `0x38` hold no value (`0xFFFFFFFF` in every file). Readers of later versions read a
 //! flags word at `0x38` and two 16-bit predicate fields at `0x3C` and `0x3E` there; this reader refuses those versions.
@@ -26,9 +26,11 @@
 //! signature for one of those names is refused. `__types__` is empty: there is no reflection, so class layouts live in
 //! [`physics`], stated per SDK version and confirmed on the data. `__data__` holds the
 //! objects; its fixups are local `{src,dst}`, global `{src,section,dst}` and virtual `{src,section,class-name offset}`,
-//! each list ending at `0xFFFFFFFF` (the rest of its range is `0xFFFFFFFF` padding). An *object* is a virtual-fixup target;
-//! it extends to the next one (arrays and strings that follow belong to it). A pointer slot is non-null iff it has a local
-//! or global fixup; a slot with neither must hold zero.
+//! each list ending at `0xFFFFFFFF` (the rest of its range is `0xFFFFFFFF` padding). An *object* is a virtual-fixup target
+//! on a 16-byte boundary; it extends to the next one (arrays and strings that follow belong to it). A pointer slot is
+//! non-null iff it has a local or global fixup, and holds zero either way. A fixup's source is a 4-byte-aligned word; a
+//! local fixup's target is 4-byte aligned and a global fixup's 16-byte aligned. An array header is `ptr, size,
+//! size | 0x80000000`, with a fixup on the pointer iff the array is not empty.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -77,6 +79,9 @@ const MAGIC: [u8; 8] = [0x57, 0xE0, 0xE0, 0x57, 0x10, 0xC0, 0xC0, 0x10];
 const SECTION_HEADER: usize = 48;
 const FIRST_SECTION: usize = 0x40;
 const END_OF_FIXUPS: u32 = 0xFFFF_FFFF;
+/// The flag the capacity word of every array in the files carries beside the size (`size | 0x80000000`, also when the
+/// array is empty).
+const ARRAY_CAPACITY_FLAG: u32 = 0x8000_0000;
 
 /// A section header; every offset but `start` is relative to `start`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,8 +232,22 @@ impl<'a> Packfile<'a> {
         for i in 0..count {
             // in range: the table fits the file (checked above)
             let o = FIRST_SECTION.saturating_add(i.saturating_mul(SECTION_HEADER));
-            let tag_bytes = v.slice(o, 19).map_err(bounds(o, "a section tag"))?;
-            let tag_bytes = tag_bytes.split(|&b| b == 0).next().unwrap_or_default();
+            let field = v.array::<20>(o).map_err(bounds(o, "a section tag"))?;
+            let [tag_area @ .., marker] = field;
+            if marker != 0xFF {
+                return Err(invalid(
+                    o.saturating_add(19),
+                    format!("section header byte 19 is {marker:#04x}, not 0xFF"),
+                ));
+            }
+            let name_len = tag_area.iter().position(|&b| b == 0).unwrap_or(tag_area.len());
+            let (tag_bytes, after_name) = tag_area.split_at(name_len);
+            if after_name.iter().any(|&b| b != 0) {
+                return Err(invalid(
+                    o.saturating_add(name_len),
+                    "section tag is followed by bytes that are not zero",
+                ));
+            }
             let tag = std::str::from_utf8(tag_bytes)
                 .map_err(|_| invalid(o, "section tag is not text"))?
                 .to_string();
@@ -383,21 +402,34 @@ impl<'a> Packfile<'a> {
             }
             Ok(out)
         };
-        let slot = |at: usize, dst: usize, what: &str| -> Result<()> {
+        // in the 490 files a fixup's source is a 4-byte word at a 4-byte offset (all 130,610), the target of a local one
+        // is 4-byte aligned (82,847) and the target of a global one 16-byte aligned (47,763)
+        let slot = |at: usize, dst: usize, dst_alignment: usize, what: &str| -> Result<()> {
             let in_range = sum(data_start, at, 4)? <= data_len;
-            if in_range && dst <= data_len {
-                Ok(())
-            } else {
-                Err(invalid(
+            if !in_range || dst > data_len {
+                return Err(invalid(
                     data_start.saturating_add(at),
                     format!("{what} fixup {at:#x} -> {dst:#x} is outside the data"),
-                ))
+                ));
             }
+            if !at.is_multiple_of(4) {
+                return Err(invalid(
+                    data_start.saturating_add(at),
+                    format!("{what} fixup source {at:#x} is not 4-byte aligned"),
+                ));
+            }
+            if !dst.is_multiple_of(dst_alignment) {
+                return Err(invalid(
+                    data_start.saturating_add(at),
+                    format!("{what} fixup target {dst:#x} is not {dst_alignment}-byte aligned"),
+                ));
+            }
+            Ok(())
         };
         let mut local = Vec::new();
         for e in fixups(data_header.local, data_header.global, 2)? {
             let (src, dst) = (e.first().copied().unwrap_or(0), e.get(1).copied().unwrap_or(0));
-            slot(src, dst, "local")?;
+            slot(src, dst, 4, "local")?;
             local.push((src, dst));
         }
         let mut global = Vec::new();
@@ -413,7 +445,7 @@ impl<'a> Packfile<'a> {
                     format!("global fixup into section {sec} (the data section only)"),
                 ));
             }
-            slot(src, dst, "global")?;
+            slot(src, dst, 16, "global")?;
             global.push((src, dst));
         }
         let mut virtuals = Vec::new();
@@ -438,6 +470,9 @@ impl<'a> Packfile<'a> {
             })?;
             if src >= data_len {
                 return Err(invalid(here, "object starts outside the data"));
+            }
+            if !src.is_multiple_of(16) {
+                return Err(invalid(here, "object is not 16-byte aligned"));
             }
             virtuals.push((src, class));
         }
@@ -623,7 +658,7 @@ impl<'a> Packfile<'a> {
     }
 
     /// The pointer stored at `offset`: None when null. A slot with a fixup resolves to its target in the data section;
-    /// one without must hold zero.
+    /// the slot holds zero either way.
     pub fn pointer(&self, offset: usize) -> Result<Option<usize>> {
         let word = self.u32(offset)?;
         let local = self
@@ -636,10 +671,14 @@ impl<'a> Packfile<'a> {
             .binary_search_by_key(&offset, |(s, _)| *s)
             .ok()
             .and_then(|i| self.global.get(i));
-        match local.or(global) {
-            Some(&(_, dst)) => Ok(Some(dst)),
-            None if word == 0 => Ok(None),
-            None => Err(self.err(offset, format!("pointer slot holds {word:#x} but has no fixup"))),
+        match (local.or(global), word) {
+            (Some(&(_, dst)), 0) => Ok(Some(dst)),
+            (Some(_), _) => Err(self.err(
+                offset,
+                format!("pointer slot with a fixup holds {word:#x}, not zero"),
+            )),
+            (None, 0) => Ok(None),
+            (None, _) => Err(self.err(offset, format!("pointer slot holds {word:#x} but has no fixup"))),
         }
     }
 
@@ -649,17 +688,24 @@ impl<'a> Packfile<'a> {
             .ok_or_else(|| self.err(offset, format!("{what} is null")))
     }
 
-    /// A hkArray header at `offset` (`ptr, size, capacityAndFlags`): the size fits the capacity, a non-empty array has data.
+    /// A hkArray header at `offset` (`ptr, size, capacityAndFlags`). The capacity word is the size with `0x80000000`
+    /// set, also for an empty array; a non-empty array has data (a fixup) and an empty one has none.
     pub fn array_header(&self, offset: usize) -> Result<Array> {
         let data = self.pointer(offset)?;
         let len = self.count(self.at(offset, 4)?)?;
         let cap = self.u32(self.at(offset, 8)?)?;
-        let capacity = to_usize(cap & 0x3FFF_FFFF);
-        if len > capacity {
-            return Err(self.err(offset, format!("array of {len} exceeds its capacity {capacity}")));
+        let want = u32::try_from(len).map(|n| n | ARRAY_CAPACITY_FLAG).ok();
+        if want != Some(cap) {
+            return Err(self.err(
+                offset,
+                format!("array of {len} has capacity word {cap:#010x}, not its size or {ARRAY_CAPACITY_FLAG:#010x}"),
+            ));
         }
         if len != 0 && data.is_none() {
             return Err(self.err(offset, "non-empty array has no data"));
+        }
+        if len == 0 && data.is_some() {
+            return Err(self.err(offset, "empty array has a fixup"));
         }
         Ok(Array { data, len })
     }

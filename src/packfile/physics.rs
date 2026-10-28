@@ -10,10 +10,18 @@
 //! | hkpRigidBody | shape pointer | `+0x10` | never null; its class is a known shape |
 //! | | shape key | `+0x14` | `0xFFFFFFFF` in every body |
 //! | | collisionFilterInfo (of the collidable's broad-phase handle) | `+0x2C` | 0, 2, 7, 11, 15 or 18 in the data |
+//! | | quality type (i8) | `+0x2A` | 0 in the fixed bodies, 4 in the dynamic ones |
+//! | | allowed penetration depth | `+0x5C` | `0x7F7FFFEE` in the fixed bodies, 0.015 to 0.635 in the dynamic ones |
 //! | | name pointer | `+0x74` | C string in every body |
 //! | | material: response type (u8), friction, restitution | `+0x8C`, `+0x90`, `+0x94` | type 1 in every body; finite |
 //! | | storageIndex (u16), contactPointCallbackDelay (u16) | `+0xA8`, `+0xAA` | 540 distinct indices from 0; delay `0xFFFF` in every body |
 //! | | motion type (u8) | `+0xE8` | 2, 3 or 5 (sphere inertia, box inertia, fixed); fixed = all 1,758 meshes |
+//! | | swept transform: centres of mass 0 and 1 (xyz), rotations 0 and 1 | `+0x130`, `+0x140`; `+0x150`, `+0x160` | equal pairs, in all 12,789 bodies |
+//! | | centre of mass in the body's frame | `+0x170` | |
+//! | | objectRadius, linear and angular damping | `+0x190`, `+0x194`, `+0x198` | |
+//! | | inertiaAndMassInv: inverse inertia xyz, inverse mass w | `+0x1A0`, `+0x1AC` | all zero in the 2,021 fixed bodies, all positive in the 10,768 dynamic ones |
+//! | | linear and angular velocity | `+0x1B0`, `+0x1C0` | zero (16 bytes each) |
+//! | | gravityFactor (half) | `+0x1FE` | 1.0 in every body |
 //! | | rotation, three columns of 16 bytes (xyz used) | `+0xF0` | orthonormal, det +1 in every body |
 //! | | translation | `+0x120` | equals the swept centre `+0x130` unless the body has a centre-of-mass offset |
 //! | hkpMoppBvTreeShape | child shape pointer | `+0x34` | a mesh (1,704) or a list (1) |
@@ -23,6 +31,8 @@
 //! | | numBitsForSubpartIndex | `+0xB0` | 12 |
 //! | | trianglesSubparts (hkArray, 96-byte elements) | `+0xB4` | |
 //! | | weldingInfo (hkArray of u16) | `+0xCC` | length = total triangles |
+//! | | weldingType (u8), defaultCollisionFilterInfo, cachedNumChildShapes, triangleRadius | `+0xD8`, `+0xDC`, `+0xE0`, `+0xE4` | 0; 0; at most the triangle count (equal in 1,277 of 1,758); 0.001. `+0xD9..+0xDC` and `+0xE8..+0xF0` are zero |
+//! | | shape storage (hkArray) | `+0xFC` | empty in every mesh; the body is 0x110 bytes |
 //! | | meshStorage (hkArray of pointers) | `+0xF0` | length = subparts; each a MeshSubpartStorage |
 //! | TrianglesSubpart (96 B) | type (u8), materialIndexStridingType (u8), materialStriding (i16) | `+0x00`, `+0x01`, `+0x02` | 0 (triangles), 2 (16-bit indices), 12 |
 //! | | materialIndexStriding (u16), numMaterials (u16) | `+0x08`, `+0x0A` | 2; = storage material count |
@@ -43,16 +53,28 @@
 //! | hkpConvexVerticesShape | radius, aabb half extents, centre | `+0x10`, `+0x20`, `+0x30` | every vertex inside the aabb |
 //! | | rotatedVertices (FourVectors, 48 B: `x[4]`, `y[4]`, `z[4]`) | `+0x40` | |
 //! | | vertex count | `+0x4C` | fits the FourVectors (`4 n-3 ..= 4 n`) |
-//! | | planeEquations (16 B) | `+0x54` | stored, **not exact hull faces** (normals not unit, some violated) |
+//! | | a pointer slot | `+0x50` | zero with no fixup in all 8,780 shapes |
+//! | | planeEquations (16 B) | `+0x54` | stored, **not exact hull faces**: normals are unit in 8,550 shapes, one other length in 221, mixed in 9; 222 shapes have a hull vertex outside their planes |
+//! | | connectivity pointer | `+0x60` | an `hkpConvexVerticesConnectivity` (8,751; null in 29); `+0x64..+0x70` zero, the shape is 0x70 bytes |
 //! | hkpBoxShape | radius, half extents | `+0x10`, `+0x20` | |
 //! | hkpSphereShape | radius | `+0x10` | |
-//! | hkpCapsuleShape | radius, vertex A, vertex B | `+0x10`, `+0x20`, `+0x30` | |
+//! | hkpCapsuleShape | radius, vertex A, vertex B | `+0x10`, `+0x20`, `+0x30` | the w lanes `+0x2C`, `+0x3C` equal the radius in all 96 |
 //! | hkpCylinderShape | radius, cylinder radius, base-radius factor, A, B | `+0x10`, `+0x14`, `+0x18`, `+0x20`, `+0x30` | |
 //! | hkpConvexTranslateShape | child, translation | `+0x18`, `+0x20` | a box (1,384) or sphere (16) |
-//! | hkpListShape | childInfo (hkArray of 16-byte records, shape pointer first) | `+0x18` | |
+//! | hkpListShape | childInfo (hkArray of 16-byte records: shape pointer, collisionFilterInfo, two zero words) | `+0x18` | 41 records in 10 lists; the filter word is 0 in all |
+//! | hkpMoppBvTreeShape | code pointer | `+0x14` | an `hkpMoppCode` |
+//! | hkpMoppCode | `info.offset` (xyz), scale (w) | `+0x10` | offset = the mesh's minimum corner (1,704 codes over a mesh) |
+//! | | code (hkArray of bytes) | `+0x20` | its data follows the 0x30-byte body, the object is exactly `0x30 + length` bytes (1,705) |
+//! | | buildType (i8) | `+0x2C` | 0; `+0x00..+0x10` and `+0x2D..+0x30` are zero |
+//! | hkpConvexVerticesConnectivity | vertexIndices (hkArray of u16), numVerticesPerFace (hkArray of u8) | `+0x08`, `+0x14` | the counts add up to the index count and every index names a vertex (8,751) |
+//! | every shape | userData | `+0x08` | 0 but in 583 convex-vertices shapes of box-inertia bodies and 45 extended meshes (1) |
+//! | | shape type | `+0x0C` | 0 in all 15,935 shapes ([`shape_user_data`]) |
 //!
-//! `hkpMoppCode`, `hkpConvexVerticesConnectivity`, the constraint classes and the container/system classes are
-//! recognised by name and counted by [`census`], not decoded.
+//! Every array header has the capacity word `size | 0x80000000` (an empty array has no fixup) and every pointer slot
+//! holds zero whether or not it has a fixup; see [`Packfile::array_header`] and [`Packfile::pointer`].
+//!
+//! The constraint classes and the container/system classes are recognised by name and counted by [`census`], not
+//! decoded.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -64,12 +86,14 @@ use super::Packfile;
 use crate::Result;
 
 /// Classes decoded by this module.
-pub const DECODED: [&str; 11] = [
+pub const DECODED: [&str; 13] = [
     "hkpRigidBody",
     "hkpMoppBvTreeShape",
+    "hkpMoppCode",
     "hkpStorageExtendedMeshShape",
     "hkpStorageExtendedMeshShapeMeshSubpartStorage",
     "hkpConvexVerticesShape",
+    "hkpConvexVerticesConnectivity",
     "hkpBoxShape",
     "hkpSphereShape",
     "hkpCapsuleShape",
@@ -78,9 +102,7 @@ pub const DECODED: [&str; 11] = [
     "hkpConvexTranslateShape",
 ];
 /// Classes recognised by name and reported, not decoded.
-pub const RECOGNISED: [&str; 9] = [
-    "hkpMoppCode",
-    "hkpConvexVerticesConnectivity",
+pub const RECOGNISED: [&str; 7] = [
     "hkpConstraintInstance",
     "hkpRagdollConstraintData",
     "hkpLimitedHingeConstraintData",
@@ -141,6 +163,25 @@ pub const MOTION_THIN_BOX_INERTIA: u8 = 6;
 /// Motion type 7: character.
 pub const MOTION_CHARACTER: u8 = 7;
 
+/// Fail unless the `len` bytes at `offset` are zero.
+fn zero(pack: &Packfile<'_>, offset: usize, len: usize, what: &str) -> Result<()> {
+    if pack.bytes(offset, len)?.iter().any(|&b| b != 0) {
+        Err(pack.err(offset, format!("{what} is not zero")))
+    } else {
+        Ok(())
+    }
+}
+
+/// The `userData` word (`+0x08`) of the shape object at `offset`, whatever its class: 1 in 583 convex-vertices shapes
+/// (all on box-inertia bodies) and 45 extended meshes, 0 in the other 15,307 shapes. The word at `+0x0C` (the shape type)
+/// is 0 in all 15,935 shapes and is refused otherwise.
+pub fn shape_user_data(pack: &Packfile<'_>, offset: usize) -> Result<u32> {
+    if pack.u32(pack.at(offset, 0x0C)?)? != 0 {
+        return Err(pack.err(pack.at(offset, 0x0C)?, "the shape type word is not zero"));
+    }
+    pack.u32(pack.at(offset, 0x08)?)
+}
+
 /// An `hkpRigidBody`: where it is, what it is named and the shape it carries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RigidBody {
@@ -166,6 +207,29 @@ pub struct RigidBody {
     pub rotation: [[f32; 3]; 3],
     /// The body's position.
     pub translation: [f32; 3],
+    /// `qualityType` (`+0x2A`): 0 in the fixed bodies, 4 in the dynamic ones.
+    pub quality_type: i8,
+    /// `allowedPenetrationDepth` (`+0x5C`): `3.40282e38` (`0x7F7FFFEE`) in the fixed bodies, 0.015 to 0.635 in the
+    /// dynamic ones.
+    pub allowed_penetration_depth: f32,
+    /// The motion's `objectRadius` (`+0x190`). It is not a bound of the shape's extent: 2,051 of the 10,758 dynamic
+    /// bodies with a convex shape store less than the distance from the centre of mass to the shape's farthest point.
+    pub object_radius: f32,
+    /// The motion's linear damping (`+0x194`).
+    pub linear_damping: f32,
+    /// The motion's angular damping (`+0x198`).
+    pub angular_damping: f32,
+    /// The `xyz` of `inertiaAndMassInv` (`+0x1A0`): all zero in a fixed body, all positive in a dynamic one. They are
+    /// the *inverse* inertia: for 494 of the 587 dynamic bodies that carry a box shape, `x` times the solid box's
+    /// `m/3 (hy^2 + hz^2)` (`m` from [`inverse_mass`](Self::inverse_mass)) lies in 0.8 to 1.05, and for none is `x` close
+    /// to that inertia itself.
+    pub inverse_inertia: [f32; 3],
+    /// The `w` of `inertiaAndMassInv` (`+0x1AC`): zero in a fixed body, positive in a dynamic one.
+    pub inverse_mass: f32,
+    /// The motion's centre of mass in the body's frame (`+0x170`, xyz).
+    pub center_of_mass_local: [f32; 3],
+    /// `gravityFactor` (`+0x1FE`, a half).
+    pub gravity_factor: f32,
 }
 
 impl RigidBody {
@@ -188,6 +252,27 @@ impl RigidBody {
         let motion_type = pack.u8(at(0xE8)?)?;
         if ![MOTION_SPHERE_INERTIA, MOTION_BOX_INERTIA, MOTION_FIXED].contains(&motion_type) {
             return Err(pack.err(at(0xE8)?, format!("motion type {motion_type} is not 2, 3 or 5")));
+        }
+        let inverse_inertia = pack.floats::<3>(at(0x1A0)?)?;
+        let inverse_mass = pack.f32(at(0x1AC)?)?;
+        if motion_type == MOTION_FIXED {
+            if inverse_inertia != [0.0; 3] || inverse_mass != 0.0 {
+                return Err(pack.err(at(0x1A0)?, "a fixed body has inverse inertia or inverse mass"));
+            }
+        } else if inverse_inertia.iter().any(|&x| x <= 0.0) || inverse_mass <= 0.0 {
+            return Err(pack.err(
+                at(0x1A0)?,
+                "a dynamic body has no positive inverse inertia and inverse mass",
+            ));
+        }
+        zero(pack, at(0x1B0)?, 16, "linear velocity")?;
+        zero(pack, at(0x1C0)?, 16, "angular velocity")?;
+        // the swept transform of a body at rest: both ends equal (the time lanes differ and are not compared)
+        if pack.bytes(at(0x130)?, 12)? != pack.bytes(at(0x140)?, 12)? {
+            return Err(pack.err(at(0x130)?, "the swept transform's two centres of mass differ"));
+        }
+        if pack.bytes(at(0x150)?, 16)? != pack.bytes(at(0x160)?, 16)? {
+            return Err(pack.err(at(0x150)?, "the swept transform's two rotations differ"));
         }
         let mut rotation = [[0.0; 3]; 3];
         for (i, col) in rotation.iter_mut().enumerate() {
@@ -225,6 +310,15 @@ impl RigidBody {
             motion_type,
             rotation,
             translation: pack.floats::<3>(at(0x120)?)?,
+            quality_type: i8::from_be_bytes([pack.u8(at(0x2A)?)?]),
+            allowed_penetration_depth: pack.f32(at(0x5C)?)?,
+            object_radius: pack.f32(at(0x190)?)?,
+            linear_damping: pack.f32(at(0x194)?)?,
+            angular_damping: pack.f32(at(0x198)?)?,
+            inverse_inertia,
+            inverse_mass,
+            center_of_mass_local: pack.floats::<3>(at(0x170)?)?,
+            gravity_factor: half(pack, at(0x1FE)?)?,
         })
     }
 
@@ -307,6 +401,17 @@ pub struct ExtendedMesh {
     pub subparts: Vec<Subpart>,
     /// Per triangle (all subparts in order), the 16-bit welding info.
     pub welding: Vec<u16>,
+    /// `weldingType` (`+0xD8`): 0 in every mesh of the corpus.
+    pub welding_type: u8,
+    /// `defaultCollisionFilterInfo` (`+0xDC`): 0 in every mesh of the corpus.
+    pub default_collision_filter_info: u32,
+    /// `cachedNumChildShapes` (`+0xE0`): at most the triangle count (equal in 1,277 of the 1,758 meshes, smaller in
+    /// 481; which triangles those leave out is not known).
+    pub cached_num_child_shapes: u32,
+    /// `triangleRadius` (`+0xE4`): 0.001 in every mesh of the corpus.
+    pub triangle_radius: f32,
+    /// The shape's `userData` (`+0x08`, see [`shape_user_data`]): 1 in 45 meshes, 0 in the rest.
+    pub user_data: u32,
 }
 
 impl ExtendedMesh {
@@ -327,6 +432,12 @@ impl ExtendedMesh {
         if pack.array_header(at(0xC0)?)?.len != 0 {
             return Err(pack.err(at(0xC0)?, "shape subparts are not supported"));
         }
+        if pack.array_header(at(0xFC)?)?.len != 0 {
+            return Err(pack.err(at(0xFC)?, "shape storage is not supported"));
+        }
+        zero(pack, at(0xD9)?, 3, "the padding after weldingType")?;
+        zero(pack, at(0xE8)?, 8, "the padding after triangleRadius")?;
+        let user_data = shape_user_data(pack, offset)?;
         if pack.floats::<4>(at(0x80)?)? != [1.0; 4] {
             return Err(pack.err(at(0x80)?, "scaling is not (1, 1, 1, 1)"));
         }
@@ -362,11 +473,23 @@ impl ExtendedMesh {
         for i in 0..weld.len {
             welding.push(pack.u16(pack.at(weld.data.unwrap_or(0), i.saturating_mul(2))?)?);
         }
+        let cached_num_child_shapes = pack.u32(at(0xE0)?)?;
+        if usize::try_from(cached_num_child_shapes).map_or(true, |n| n > total) {
+            return Err(pack.err(
+                at(0xE0)?,
+                format!("cachedNumChildShapes {cached_num_child_shapes} exceeds the {total} triangles"),
+            ));
+        }
         Ok(Self {
             aabb_half_extents: pack.floats::<3>(at(0x90)?)?,
             aabb_center: pack.floats::<3>(at(0xA0)?)?,
             subparts,
             welding,
+            welding_type: pack.u8(at(0xD8)?)?,
+            default_collision_filter_info: pack.u32(at(0xDC)?)?,
+            cached_num_child_shapes,
+            triangle_radius: pack.f32(at(0xE4)?)?,
+            user_data,
         })
     }
 
@@ -503,6 +626,45 @@ pub struct ConvexVertices {
     pub vertices: Vec<[f32; 3]>,
     /// Stored plane equations `(nx, ny, nz, d)`: approximate, not exact hull faces.
     pub planes: Vec<[f32; 4]>,
+    /// The faces of the hull as vertex indices, from the shape's connectivity object; empty when the shape has none
+    /// (29 of the 8,780 shapes). There are at least as many [`planes`](Self::planes) as faces, and the first ones
+    /// are the faces' planes in order in most shapes (every pair in 7,587 of the 8,751 with faces).
+    pub faces: Vec<Vec<u16>>,
+    /// The shape's `userData` (`+0x08`, see [`shape_user_data`]): 1 in the 583 convex shapes of box-inertia bodies.
+    pub user_data: u32,
+}
+
+/// The faces of an `hkpConvexVerticesConnectivity` at `offset`: its vertex indices (`+0x08`, `u16`) cut into runs by
+/// its per-face counts (`+0x14`, `u8`), which must use every index and name only vertices below `vertex_count`.
+fn connectivity(pack: &Packfile<'_>, offset: usize, vertex_count: usize) -> Result<Vec<Vec<u16>>> {
+    if pack.class_at(offset)? != "hkpConvexVerticesConnectivity" {
+        return Err(pack.err(offset, "the connectivity is not a hkpConvexVerticesConnectivity"));
+    }
+    let indices = pack.array_header(pack.at(offset, 0x08)?)?;
+    let counts = pack.array_header(pack.at(offset, 0x14)?)?;
+    let mut next = 0usize;
+    let mut faces = Vec::new();
+    for f in 0..counts.len {
+        let count = usize::from(pack.u8(pack.at(counts.data.unwrap_or(0), f)?)?);
+        let end = next
+            .checked_add(count)
+            .filter(|&end| end <= indices.len)
+            .ok_or_else(|| pack.err(offset, "the faces use more vertex indices than are stored"))?;
+        let mut face = Vec::new();
+        for k in next..end {
+            let index = pack.u16(pack.at(indices.data.unwrap_or(0), k.saturating_mul(2))?)?;
+            if usize::from(index) >= vertex_count {
+                return Err(pack.err(offset, "a face names a vertex the shape does not have"));
+            }
+            face.push(index);
+        }
+        faces.push(face);
+        next = end;
+    }
+    if next != indices.len {
+        return Err(pack.err(offset, "the faces leave stored vertex indices unused"));
+    }
+    Ok(faces)
 }
 
 impl ConvexVertices {
@@ -512,6 +674,11 @@ impl ConvexVertices {
         if pack.class_at(offset)? != "hkpConvexVerticesShape" {
             return Err(pack.err(offset, "not a hkpConvexVerticesShape"));
         }
+        let user_data = shape_user_data(pack, offset)?;
+        if pack.pointer(at(0x50)?)?.is_some() {
+            return Err(pack.err(at(0x50)?, "the slot at +0x50 has a fixup"));
+        }
+        zero(pack, at(0x64)?, 12, "the end of the shape")?;
         let groups = pack.array_header(at(0x40)?)?;
         let n = pack.count(at(0x4C)?)?;
         let capacity = groups.len.saturating_mul(4);
@@ -536,23 +703,86 @@ impl ConvexVertices {
         for i in 0..pl.len {
             planes.push(pack.floats::<4>(pack.at(pl.data.unwrap_or(0), i.saturating_mul(16))?)?);
         }
+        let connected = pack.pointer(at(0x60)?)?;
+        let faces = match connected {
+            Some(c) => connectivity(pack, c, n)?,
+            None => Vec::new(),
+        };
+        if connected.is_some() && planes.len() < faces.len() {
+            return Err(pack.err(
+                at(0x54)?,
+                format!("{} planes for {} faces", planes.len(), faces.len()),
+            ));
+        }
         Ok(Self {
             radius: pack.f32(at(0x10)?)?,
             aabb_half_extents: pack.floats::<3>(at(0x20)?)?,
             aabb_center: pack.floats::<3>(at(0x30)?)?,
             vertices,
             planes,
+            faces,
+            user_data,
         })
     }
+}
+
+/// An `hkpMoppCode`: the byte code of a MOPP tree and the box it is scaled into.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoppCode {
+    /// `info.offset` (`+0x10`, xyz): the minimum corner of the box the code covers; the mesh's own minimum corner in
+    /// the 1,704 codes over a mesh.
+    pub offset: [f32; 3],
+    /// `info.offset`'s `w` (`+0x1C`): the code's scale. Over a mesh, `scale` times the mesh box's longest extent over
+    /// `2^24` rounds to 0.99 in all 1,704 codes.
+    pub scale: f32,
+    /// `buildType` (`+0x2C`): 0 in every code of the corpus.
+    pub build_type: i8,
+    /// The code bytes (the array at `+0x20`; its data follows the 0x30-byte body).
+    pub code: Vec<u8>,
+}
+
+impl MoppCode {
+    /// The MOPP code at data-section `offset`.
+    pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
+        let at = |add| pack.at(offset, add);
+        if pack.class_at(offset)? != "hkpMoppCode" {
+            return Err(pack.err(offset, "not a hkpMoppCode"));
+        }
+        zero(pack, offset, 0x10, "the start of a MOPP code")?;
+        let code = pack.array_header(at(0x20)?)?;
+        if code.data != Some(at(0x30)?) {
+            return Err(pack.err(at(0x20)?, "the code does not follow the 0x30-byte body"));
+        }
+        zero(pack, at(0x2D)?, 3, "the padding after buildType")?;
+        let bytes = pack.bytes(at(0x30)?, code.len)?;
+        Ok(Self {
+            offset: pack.floats::<3>(at(0x10)?)?,
+            scale: pack.f32(at(0x1C)?)?,
+            build_type: i8::from_be_bytes([pack.u8(at(0x2C)?)?]),
+            code: bytes.to_vec(),
+        })
+    }
+}
+
+/// One entry of an `hkpListShape`'s `childInfo`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListChild {
+    /// Data-section offset of the child shape (the pointer at the record's start).
+    pub shape: usize,
+    /// The record's `collisionFilterInfo` word (`+4`): 0 in the 41 records of the corpus. One `u32` or two `u16`
+    /// cannot be told apart in zeros; the word is kept whole.
+    pub collision_filter_info: u32,
 }
 
 /// A collision shape, one view per class.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
-    /// A MOPP tree; its code is not decoded. The child holds the geometry.
+    /// A MOPP tree. The child holds the geometry.
     Mopp {
         /// Data-section offset of the child shape (`hkpMoppBvTreeShape`, the pointer at 0x34).
         child: usize,
+        /// Data-section offset of the shape's `hkpMoppCode` (the pointer at 0x14); read it with [`MoppCode::read`].
+        code: usize,
     },
     /// An `hkpStorageExtendedMeshShape`.
     ExtendedMesh(ExtendedMesh),
@@ -601,8 +831,8 @@ pub enum Shape {
     },
     /// An `hkpListShape`.
     List {
-        /// Data-section offsets of the child shapes, in the stored order.
-        children: Vec<usize>,
+        /// The child shapes, in the stored order.
+        children: Vec<ListChild>,
     },
 }
 
@@ -611,10 +841,17 @@ impl Shape {
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
         let at = |add| pack.at(offset, add);
         let class = pack.class_at(offset)?;
-        Ok(match class {
-            "hkpMoppBvTreeShape" => Self::Mopp {
-                child: pack.target(at(0x34)?, "MOPP child shape")?,
-            },
+        let shape = match class {
+            "hkpMoppBvTreeShape" => {
+                let code = pack.target(at(0x14)?, "MOPP code")?;
+                if pack.class_at(code)? != "hkpMoppCode" {
+                    return Err(pack.err(at(0x14)?, "the MOPP code is not a hkpMoppCode"));
+                }
+                Self::Mopp {
+                    child: pack.target(at(0x34)?, "MOPP child shape")?,
+                    code,
+                }
+            }
             "hkpStorageExtendedMeshShape" => Self::ExtendedMesh(ExtendedMesh::read(pack, offset)?),
             "hkpConvexVerticesShape" => Self::ConvexVertices(ConvexVertices::read(pack, offset)?),
             "hkpBoxShape" => Self::Box {
@@ -624,11 +861,18 @@ impl Shape {
             "hkpSphereShape" => Self::Sphere {
                 radius: pack.f32(at(0x10)?)?,
             },
-            "hkpCapsuleShape" => Self::Capsule {
-                radius: pack.f32(at(0x10)?)?,
-                a: pack.floats::<3>(at(0x20)?)?,
-                b: pack.floats::<3>(at(0x30)?)?,
-            },
+            "hkpCapsuleShape" => {
+                let radius = pack.f32(at(0x10)?)?;
+                // the fourth lane of each end holds the radius again
+                if pack.f32(at(0x2C)?)? != radius || pack.f32(at(0x3C)?)? != radius {
+                    return Err(pack.err(at(0x2C)?, "a capsule end's w lane is not the radius"));
+                }
+                Self::Capsule {
+                    radius,
+                    a: pack.floats::<3>(at(0x20)?)?,
+                    b: pack.floats::<3>(at(0x30)?)?,
+                }
+            }
             "hkpCylinderShape" => Self::Cylinder {
                 radius: pack.f32(at(0x10)?)?,
                 cylinder_radius: pack.f32(at(0x14)?)?,
@@ -645,11 +889,22 @@ impl Shape {
                 let mut children = Vec::new();
                 for i in 0..info.len {
                     let rec = pack.at(info.data.unwrap_or(0), i.saturating_mul(16))?;
-                    children.push(pack.target(rec, "list child shape")?);
+                    zero(
+                        pack,
+                        pack.at(rec, 8)?,
+                        8,
+                        "the end of a list shape's child record",
+                    )?;
+                    children.push(ListChild {
+                        shape: pack.target(rec, "list child shape")?,
+                        collision_filter_info: pack.u32(pack.at(rec, 4)?)?,
+                    });
                 }
                 Self::List { children }
             }
             other => return Err(pack.err(offset, format!("no view for shape class {other}"))),
-        })
+        };
+        shape_user_data(pack, offset)?;
+        Ok(shape)
     }
 }
