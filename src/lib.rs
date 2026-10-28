@@ -94,6 +94,7 @@ mod animation_write;
 pub mod behavior;
 mod bvtree;
 pub mod cloth;
+pub mod constraint;
 pub mod convex;
 mod extern_mesh;
 mod mesh;
