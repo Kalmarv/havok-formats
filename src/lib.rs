@@ -93,17 +93,23 @@ pub mod animation;
 mod animation_write;
 pub mod behavior;
 mod bvtree;
+mod bvtree_write;
 pub mod cloth;
 pub mod constraint;
 pub mod convex;
 mod extern_mesh;
+mod extern_write;
 mod mesh;
 pub mod navmesh;
 
 pub mod mopp;
 pub mod packfile;
 mod polygon;
+
+mod mesh_write;
+mod schema;
 mod section;
+mod simd_write;
 mod simdtree;
 pub mod spline;
 mod spline_data;
@@ -115,11 +121,18 @@ pub use bvtree::{
     BOUNDS_TOLERANCE_ULPS, BoundsCheck, BvNode, BvNodeKind, BvTree, MeshTrees, NodeWidth, SectionTree,
     mesh_trees,
 };
+pub use bvtree_write::{Aabb, EncodedTree, Shape, balanced_shape, encode_tree, shape_of};
 pub use extern_mesh::{ExternMesh, extern_mesh};
+pub use extern_write::{ExternSource, extern_mesh_shapes, replace_extern_mesh};
 pub use mesh::{
     CompressedMesh, CustomKind, CustomPrimitive, MeshSection, PointSet, ShapeInstance, Triangle,
     compressed_mesh, extern_shapes, mesh_sections,
 };
+pub use mesh_write::{
+    BuiltMesh, BuiltSection, MAX_PRIMITIVES, MAX_SLOTS, MeshSource, build_compressed_mesh,
+    compressed_mesh_shapes, replace_compressed_mesh,
+};
+pub use simd_write::{EMPTY_BOX, SimdEncoding, SimdLeaf, build_simd_tree};
 mod tagfile;
 mod tagfile_write;
 mod types;

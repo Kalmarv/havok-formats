@@ -31,6 +31,10 @@ pub enum NodeWidth {
     /// internal node whose second child is `2 × (value & 0x7FFF)` nodes on; clear is a leaf for section `value`. The
     /// mesh trees.
     Five,
+    /// Six bytes: `x y z` nibble pairs, `hiData` and a 16-bit `loData` (`value = (hiData & 0x7F) << 16 | loData`). Bit 7
+    /// of `hiData` set is an internal node whose second child is `2 × value` nodes on; clear is a leaf for primitive
+    /// `value`. The aabb trees of extern meshes (`hknpExternMeshShapeData.aabbTree`, `Codec3Axis6`).
+    Six,
 }
 
 impl NodeWidth {
@@ -39,6 +43,7 @@ impl NodeWidth {
         match self {
             Self::Four => 4,
             Self::Five => 5,
+            Self::Six => 6,
         }
     }
 }
@@ -147,6 +152,15 @@ impl BvTree {
                         value & 0x8000 != 0,
                         usize::from(value & 0x7fff).saturating_mul(2),
                         u32::from(value & 0x7fff),
+                    )
+                }
+                (NodeWidth::Six, &[hi, low, high]) => {
+                    // `loData` is a 16-bit little-endian word
+                    let value = u32::from(hi & 0x7f) << 16 | u32::from(high) << 8 | u32::from(low);
+                    (
+                        hi & 0x80 != 0,
+                        usize::try_from(value).unwrap_or(usize::MAX).saturating_mul(2),
+                        value,
                     )
                 }
                 _ => return Err(invalid(node_at(i), "a node of the wrong width")),
