@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-10-27)
 
 Bounding-volume trees. `compressed_mesh` decodes and checks both levels of a mesh's static tree and its simd tree, and
 refuses a mesh whose trees do not hold together. Every compressed mesh of both installs' map, object and asset
