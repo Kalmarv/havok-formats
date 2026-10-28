@@ -80,6 +80,12 @@ primase_testdata::inputs! {
             about: r#"every distinct behaviour tagfile of the install: 1,021 files, loose, and `manifest.tsv` naming each of the 1,119 binder members they were found in (461 behaviour graphs, 280 characters and 280 projects); tests/behavior.rs reads them all through the typed views"#,
             source: r#"the game's own files from the user's install, found as for Sekiro (all in the 280 `chr/*.behbnd.dcx` binders)"#,
         },
+        Query::Oracle(OracleSet::Corpus, Game::Elden, "havok-behavior-xml") => {
+            status: Live,
+            gate: false,
+            about: r#"HKLib's XML (`hktagfile` version 3) of twelve Elden Ring behaviour tagfiles of the `havok-behavior` set (3 to 36,527 objects: 50,196 in all), loose, named `<tagfile>.xml`; tests/xml_oracle.rs compares them with this crate's objects of the same files"#,
+            source: r#"written by HKLib (MIT, pinned at ac40bc9, built for .NET 8) from the files of `havok-behavior`: its `HavokBinarySerializer` reads each tagfile and its `HavokXmlSerializer` writes the XML; HKLib reads only 2018.1 tagfiles, so Sekiro has none"#,
+        },
         Query::Oracle(OracleSet::Corpus, Game::Shred, "havok-packfiles") => {
             status: Live,
             gate: true,

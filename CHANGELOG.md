@@ -18,6 +18,16 @@ Sekiro and 7,438 Elden Ring tagfiles of both installs.
 - The Sekiro graph is the cluster graph of its mesh (one node per `clusterIndex`, an edge for every pair of clusters
   that share an edge, both ways: 1,509 of 1,509 files); Elden Ring has no graph, no clusters, and user edges.
 
+XML (`xml`): a tagfile's objects as Havok's `hktagfile` version 3 XML, with a parser and writer for that XML subset and a
+difference listing, for comparing this crate's reading of a file with another tool's.
+
+- `xml::objects` (the objects of a `Tagfile` as an `Element` tree, ids by first reference, types by identity),
+  `xml::Element` (`parse`, `write`), `xml::identity_form` (another writer's document in the same form),
+  `xml::latin1_strings`, `xml::diff`, `xml::diff_tagfiles`.
+- HKLib's XML of the 1,021 distinct Elden Ring behaviour tagfiles (420,275 objects) equals these objects, apart from the
+  one string with a non-ASCII character that HKLib reads byte by byte (tests/xml_oracle.rs holds twelve of them; a second
+  writer written in another language agrees on all of both installs' behaviour tagfiles).
+
 Behaviour tagfiles (`behavior`): typed views of the classes of Havok Behavior (`hkb*`) and FromSoftware's `Custom*`
 classes in `chr/*.behbnd.dcx`, and a reader of the three kinds of file those binders hold.
 

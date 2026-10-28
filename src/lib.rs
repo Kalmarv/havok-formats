@@ -14,6 +14,8 @@
 //!   ([`packfile::image`]) and the class metadata some of them carry ([`packfile::reflection`]).
 //! - Behaviour tagfiles of Sekiro and Elden Ring (`hkb*` and `Custom*` classes): typed views of every class, and a reader
 //!   of the behaviour graphs, characters and projects they hold ([`behavior`]).
+//! - A tagfile's objects as the XML Havok's tools exchange, an XML parser and writer for that subset and a difference
+//!   listing, to compare this crate's reading of a file with another tool's ([`xml`]).
 //! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`], with their bounding-volume trees
 //!   [`mesh_trees`] and [`simd_tree`]), extern triangle meshes ([`extern_mesh`]),
 //!   convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, animation bindings and spline
@@ -119,6 +121,7 @@ mod tagfile;
 mod tagfile_write;
 mod types;
 mod value;
+pub mod xml;
 pub use tagfile::{Item, ItemKind, SDK_VERSIONS, Tagfile};
 pub use tagfile_write::{ImageItem, TagfileImage};
 pub use types::{Compendium, Field, Type, TypeFlags};
