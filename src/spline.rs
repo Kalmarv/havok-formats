@@ -1,5 +1,7 @@
 //! `hkaSplineCompressedAnimation` decoded: the blocks of compressed tracks its `data` holds as typed values
-//! ([`SplineAnimation::parse`]) and each track sampled at a time ([`SplineAnimation::pose_at`]).
+//! ([`SplineAnimation::parse`]) and each track sampled at a time ([`SplineAnimation::pose_at`]) or at every frame
+//! ([`SplineAnimation::interleaved`]). Written too: the stored values of the blocks, kept exactly and laid out again
+//! ([`SplineBlocks`]), and an interleaved animation compressed ([`encode`]).
 //!
 //! The layout (the block, mask and track structure, the quantizations, the knot vectors, the spans of time a block
 //! covers) was worked out from the open-source readers Smithbox's `SplineCompressedAnimation.cs` and
@@ -63,17 +65,13 @@
 )]
 
 use crate::animation::{Animation, Tracks};
-use crate::{Error, Result, invalid};
-use primase_foundations::bytes::Endian;
+use crate::{Result, invalid};
 
-/// The knots and degree a spline track's control points are evaluated with.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Knots {
-    /// The degree of the spline (the stored byte).
-    pub degree: u8,
-    /// Frames within the block, `points + degree + 1` of them, not decreasing.
-    pub values: Vec<u8>,
-}
+pub use crate::spline_data::{
+    BlockData, FloatData, Knots, PackedQuaternion, QuaternionData, RotationData, RotationQuantization,
+    ScalarData, ScalarQuantization, SplineBlocks, TrackData, VectorData, WrittenBlocks,
+};
+pub use crate::spline_encode::{EncodeParams, Flavor, TrackParams, encode, encode_blocks};
 
 /// One component of a vector: stated by the mask or not.
 #[derive(Clone, Debug, PartialEq)]
@@ -176,379 +174,6 @@ pub enum FloatTrack {
     },
 }
 
-/// How a rotation is stored (`RotationQuantization`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RotationQuantization {
-    /// Code 1: 40 bits a quaternion, byte aligned.
-    ThreeComp40,
-    /// Code 2: 48 bits a quaternion, 2-byte aligned.
-    ThreeComp48,
-    /// Code 5: four f32, 4-byte aligned.
-    Uncompressed,
-}
-
-impl RotationQuantization {
-    fn of(code: u8, at: usize) -> Result<RotationQuantization> {
-        Ok(match code {
-            1 => RotationQuantization::ThreeComp40,
-            2 => RotationQuantization::ThreeComp48,
-            5 => RotationQuantization::Uncompressed,
-            // No transform track of the 60,209 spline animations of Sekiro's and Elden Ring's binders, animation and
-            // cutscene (5,526,279 tracks, absent rotations included), selects code 0, 3 or 4, so no real stream shows
-            // how they are stored. The cutscene tracks select code 1 only in Sekiro (17,014 tracks) and code 5 only in
-            // Elden Ring (267,433).
-            0 => return Err(invalid(at, "rotation quantization POLAR32 is not read")),
-            3 => return Err(invalid(at, "rotation quantization THREECOMP24 is not read")),
-            4 => return Err(invalid(at, "rotation quantization STRAIGHT16 is not read")),
-            other => return Err(invalid(at, format!("rotation quantization {other} is unknown"))),
-        })
-    }
-
-    /// The alignment of a quantized quaternion within the data.
-    fn align(self) -> usize {
-        match self {
-            RotationQuantization::Uncompressed => 4,
-            RotationQuantization::ThreeComp40 => 1,
-            RotationQuantization::ThreeComp48 => 2,
-        }
-    }
-}
-
-/// The quantized scalar a vector's spline control points are stored as.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Scalar {
-    Bits8,
-    Bits16,
-}
-
-impl Scalar {
-    fn of(code: u8, at: usize) -> Result<Scalar> {
-        match code {
-            0 => Ok(Scalar::Bits8),
-            1 => Ok(Scalar::Bits16),
-            other => Err(invalid(at, format!("scalar quantization {other} is unknown"))),
-        }
-    }
-}
-
-/// A track's mask.
-#[derive(Clone, Copy, Debug)]
-struct Mask {
-    position: Scalar,
-    rotation: u8,
-    scale: Scalar,
-    position_flags: u8,
-    rotation_flags: u8,
-    scale_flags: u8,
-}
-
-/// The step of a THREECOMP48 component: the f32 nearest `1 / (16383 sqrt 2)`, so the 15-bit range spans
-/// `+-1/sqrt 2`, the largest a quaternion's three smallest components can be.
-const THREE_COMP48_STEP: f32 = 4.316_100_6e-5;
-/// The step of a THREECOMP40 component: the f32 nearest `1 / (2047 sqrt 2)`, so the 12-bit range spans `+-1/sqrt 2`.
-const THREE_COMP40_STEP: f32 = 3.454_356_6e-4;
-
-const STATIC: [u8; 4] = [0x01, 0x02, 0x04, 0x08];
-const SPLINE: [u8; 4] = [0x10, 0x20, 0x40, 0x80];
-
-/// The block data's cursor ([`primase_foundations::bytes::Cursor`], little-endian), with its floats and padding as methods.
-struct Reader<'a>(primase_foundations::bytes::Cursor<'a>);
-
-impl<'a> std::ops::Deref for Reader<'a> {
-    type Target = primase_foundations::bytes::Cursor<'a>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for Reader<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<'a> Reader<'a> {
-    /// A reader of `bytes` at `at`.
-    fn at(bytes: &'a [u8], at: usize) -> Result<Self> {
-        let mut c = primase_foundations::bytes::Cursor::new(bytes);
-        c.seek(at)?;
-        Ok(Reader(c))
-    }
-
-    /// A float that must be finite (a float track's value or range).
-    fn f32(&mut self) -> Result<f32> {
-        let at = self.position();
-        let v = self.raw_f32()?;
-        if v.is_finite() {
-            Ok(v)
-        } else {
-            Err(invalid(at, "a stored float is not finite"))
-        }
-    }
-
-    /// A float as stored, finite or not (where a non-finite one is its own: see [`Unreadable`]).
-    fn raw_f32(&mut self) -> Result<f32> {
-        Ok(self.0.f32(Endian::Little)?)
-    }
-
-    /// Skip to the next multiple of `align` (a position in the whole data).
-    fn pad(&mut self, align: usize) -> Result<()> {
-        let to = self.position().next_multiple_of(align);
-        if to > self.bytes().len() {
-            return Err(invalid(self.position(), "padding runs past the animation data"));
-        }
-        self.seek(to)?;
-        Ok(())
-    }
-}
-
-fn mask(r: &mut Reader) -> Result<Mask> {
-    let at = r.position();
-    let [quantization, position, rotation, scale] = r.array::<4>()?;
-    Ok(Mask {
-        position: Scalar::of(quantization & 3, at)?,
-        rotation: (quantization >> 2) & 0xF,
-        scale: Scalar::of(quantization >> 6, at)?,
-        position_flags: position,
-        rotation_flags: rotation,
-        scale_flags: scale,
-    })
-}
-
-/// A spline track's head: the point count, the degree and the knots. The degree is 1, 2 or 3: of the 4,268,889 spline
-/// tracks (positions, rotations and scales) of the 60,209 spline animations in Sekiro's and Elden Ring's binders,
-/// 2,298,250 have degree 1 and 1,970,639 degree 3; none has degree 2, and none a higher one. Of the 164 float splines, 7
-/// have degree 1 and 157 degree 3.
-fn knots(r: &mut Reader) -> Result<(usize, Knots)> {
-    let at = r.position();
-    let items = r.i16(Endian::Little)?;
-    let degree = r.u8()?;
-    let points = usize::try_from(items)
-        .ok()
-        .and_then(|n| n.checked_add(1))
-        .ok_or_else(|| invalid(at, "a spline track with a negative count"))?;
-    if !(1..=3).contains(&degree) || points <= usize::from(degree) {
-        return Err(invalid(
-            at,
-            format!("a spline track of degree {degree} with {points} control points"),
-        ));
-    }
-    // points + degree + 1 knots
-    let count = points
-        .checked_add(usize::from(degree))
-        .and_then(|n| n.checked_add(1))
-        .ok_or_else(|| invalid(at, "the knot count overflows"))?;
-    let values = r.take(count)?.to_vec();
-    if values.windows(2).any(|w| matches!(*w, [a, b] if a > b)) {
-        return Err(invalid(at, "spline knots decrease"));
-    }
-    Ok((points, Knots { degree, values }))
-}
-
-fn quantized(r: &mut Reader, scalar: Scalar, min: f32, max: f32) -> Result<f32> {
-    let ratio = match scalar {
-        Scalar::Bits8 => f64::from(r.u8()?) / 255.0,
-        Scalar::Bits16 => f64::from(r.u16(Endian::Little)?) / 65535.0,
-    };
-    Ok(round_f32(
-        f64::from(min) + (f64::from(max) - f64::from(min)) * ratio,
-    ))
-}
-
-/// `v` rounded to the nearest f32: a value computed in f64 rounded once.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "rounding to f32 is the stated conversion"
-)]
-fn round_f32(v: f64) -> f32 {
-    v as f32
-}
-
-fn vector(r: &mut Reader, flags: u8, scalar: Scalar, unreadable: &mut Vec<usize>) -> Result<Vector> {
-    // x, y and z: the first three of the flags (w is a rotation's)
-    let spline = SPLINE.iter().take(3).any(|f| flags & f != 0);
-    let state = |i: usize| {
-        if SPLINE.get(i).is_some_and(|f| flags & f != 0) {
-            1
-        } else if STATIC.get(i).is_some_and(|f| flags & f != 0) {
-            2
-        } else {
-            0
-        }
-    };
-    if !spline {
-        let mut read = |i: usize| -> Result<Component> {
-            if state(i) == 2 {
-                let v = r.raw_f32()?;
-                if v.is_finite() {
-                    Ok(Component::Static(v))
-                } else {
-                    unreadable.push(i);
-                    Ok(Component::Absent)
-                }
-            } else {
-                Ok(Component::Absent)
-            }
-        };
-        return Ok(Vector {
-            knots: None,
-            x: read(0)?,
-            y: read(1)?,
-            z: read(2)?,
-        });
-    }
-    let (points, knots) = knots(r)?;
-    r.pad(4)?;
-    let mut bounds = [(0.0, 0.0); 3];
-    let mut component = [Component::Absent, Component::Absent, Component::Absent];
-    for ((bound, comp), i) in bounds.iter_mut().zip(component.iter_mut()).zip(0..) {
-        match state(i) {
-            1 => {
-                *bound = (r.raw_f32()?, r.raw_f32()?);
-                if !(bound.0.is_finite() && bound.1.is_finite()) {
-                    unreadable.push(i);
-                }
-            }
-            2 => {
-                let v = r.raw_f32()?;
-                if v.is_finite() {
-                    *comp = Component::Static(v);
-                } else {
-                    unreadable.push(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut curves: [Vec<f32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    for _ in 0..points {
-        for ((curve, bound), i) in curves.iter_mut().zip(&bounds).zip(0..) {
-            if state(i) == 1 {
-                curve.push(quantized(r, scalar, bound.0, bound.1)?);
-            }
-        }
-    }
-    for ((comp, curve), i) in component.iter_mut().zip(curves).zip(0..) {
-        if state(i) == 1 && !unreadable.contains(&i) {
-            *comp = Component::Spline(curve);
-        }
-    }
-    let [x, y, z] = component;
-    Ok(Vector {
-        knots: Some(knots),
-        x,
-        y,
-        z,
-    })
-}
-
-/// A quaternion stored as three components and the index and sign of the fourth, which is what makes it a unit.
-fn three_components(c: [f32; 3], shift: usize, negative: bool) -> [f32; 4] {
-    let rest = 1.0 - (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
-    let mut largest = if rest <= 0.0 { 0.0 } else { rest.sqrt() };
-    if negative {
-        largest = -largest;
-    }
-    let mut out = [0.0; 4];
-    let mut next = c.into_iter();
-    for (i, slot) in out.iter_mut().enumerate() {
-        *slot = if i == shift {
-            largest
-        } else {
-            next.next().unwrap_or_default()
-        };
-    }
-    out
-}
-
-fn quaternion(r: &mut Reader, how: RotationQuantization) -> Result<[f32; 4]> {
-    Ok(match how {
-        RotationQuantization::Uncompressed => [r.raw_f32()?, r.raw_f32()?, r.raw_f32()?, r.raw_f32()?],
-        RotationQuantization::ThreeComp48 => {
-            // 15 bits each, the top bit of each a part of the index and the sign
-            let (x, y, z) = (
-                r.i16(Endian::Little)?,
-                r.i16(Endian::Little)?,
-                r.i16(Endian::Little)?,
-            );
-            // the index: y's top bit, then x's
-            let shift = match (y < 0, x < 0) {
-                (false, false) => 0,
-                (false, true) => 1,
-                (true, false) => 2,
-                (true, true) => 3,
-            };
-            let negative = (z as u16) >> 15 != 0;
-            // a 15-bit value less 16383 is exact in f32
-            let value = |v: i16| (f32::from(v & 0x7FFF) - 16383.0) * THREE_COMP48_STEP;
-            three_components([value(x), value(y), value(z)], shift, negative)
-        }
-        RotationQuantization::ThreeComp40 => {
-            let [b0, b1, b2, b3, b4] = r.array::<5>()?;
-            let c = u64::from_le_bytes([b0, b1, b2, b3, b4, 0, 0, 0]);
-            // 12 bits each, then the index in bits 36-37 and the sign in bit 38; a 12-bit value less 2047 is exact in f32
-            let v = |shift: u32| (((c >> shift) & 0xFFF) as f32 - 2047.0) * THREE_COMP40_STEP;
-            three_components([v(0), v(12), v(24)], ((c >> 36) & 3) as usize, (c >> 38) & 1 != 0)
-        }
-    })
-}
-
-/// A rotation. A quaternion stored as non-finite floats (only an uncompressed one can be) is kept as stored and its
-/// place pushed to `bad`: the control point of a spline, or `None` for a static rotation (see [`Unreadable`]).
-fn rotation(r: &mut Reader, flags: u8, code: u8, bad: &mut Vec<Option<usize>>) -> Result<Rotation> {
-    let at = r.position();
-    let how = RotationQuantization::of(code, at)?;
-    if SPLINE.iter().any(|f| flags & f != 0) {
-        let (points, knots) = knots(r)?;
-        r.pad(how.align())?;
-        let points = (0..points)
-            .map(|_| quaternion(r, how))
-            .collect::<Result<Vec<_>>>()?;
-        for (i, p) in points.iter().enumerate() {
-            if !p.iter().all(|v| v.is_finite()) {
-                bad.push(Some(i));
-            }
-        }
-        Ok(Rotation::Spline { knots, points })
-    } else if STATIC.iter().any(|f| flags & f != 0) {
-        r.pad(how.align())?;
-        let q = quaternion(r, how)?;
-        if !q.iter().all(|v| v.is_finite()) {
-            bad.push(None);
-        }
-        Ok(Rotation::Static(q))
-    } else {
-        Ok(Rotation::Absent)
-    }
-}
-
-/// The mask byte of a float track that is a static value: the static flag `0x01` and the 16-bit quantization `0x02`.
-const FLOAT_STATIC: u8 = 0x03;
-/// The mask byte of a float track that is a spline of 16-bit control points: the spline flag `0x10` and `0x02`.
-const FLOAT_SPLINE_16: u8 = 0x12;
-
-/// One float track, by its mask byte.
-fn float_track(r: &mut Reader, mask: u8) -> Result<FloatTrack> {
-    match mask {
-        FLOAT_STATIC => Ok(FloatTrack::Static(r.f32()?)),
-        FLOAT_SPLINE_16 => {
-            let (points, knots) = knots(r)?;
-            r.pad(4)?;
-            let (low, high) = (r.f32()?, r.f32()?);
-            let points = (0..points)
-                .map(|_| quantized(r, Scalar::Bits16, low, high))
-                .collect::<Result<Vec<_>>>()?;
-            Ok(FloatTrack::Spline { knots, points })
-        }
-        other => Err(invalid(
-            r.position(),
-            format!(
-                "float track mask {other:#04x} is not read (only {FLOAT_STATIC:#04x}, a static value, and {FLOAT_SPLINE_16:#04x}, a 16-bit spline, occur)"
-            ),
-        )),
-    }
-}
-
 /// Something a track stores that is NaN or infinite, which no value can be decoded from.
 ///
 /// - A vector component (a position or scale axis) whose stored value, or the range its quantised control points are
@@ -594,7 +219,8 @@ pub struct SplineAnimation {
 impl SplineAnimation {
     /// Decode the blocks of `animation` (which must be a spline compressed one, little endian, with at most one float
     /// track). Each block must end where the data says the next thing begins: the float data at `floatBlockOffsets`,
-    /// then, after padding to 16, the next block or the end of the data.
+    /// then, after padding to 16, the next block or the end of the data. The stored values are
+    /// [`SplineBlocks::read`]'s; this decodes them ([`SplineAnimation::decode`]).
     pub fn parse(animation: &Animation) -> Result<SplineAnimation> {
         let Tracks::Spline(s) = &animation.tracks else {
             return Err(invalid(
@@ -602,231 +228,145 @@ impl SplineAnimation {
                 format!("{} is not a spline compressed animation", animation.class),
             ));
         };
-        // Every animation of the games' files with float tracks has exactly one (66 in Sekiro, 542 in Elden Ring), so
-        // what pads between two float tracks has never been seen.
-        if animation.float_tracks > 1 {
-            return Err(invalid(
-                0,
-                format!(
-                    "an animation with {} float tracks is not read (every stored one has one)",
-                    animation.float_tracks
-                ),
-            ));
-        }
-        if s.endian != 0 {
-            return Err(invalid(0, "a big endian animation is not read"));
-        }
-        // The mask area of a block: a 4-byte mask a transform track and a byte a float track, padded to 4. The header
-        // states it, and does in all 60,209 spline animations of Sekiro's (11,581) and Elden Ring's (48,628) binders,
-        // the 608 with a float track included.
-        let masks = animation
-            .transform_tracks
-            .checked_mul(4)
-            .and_then(|n| n.checked_add(animation.float_tracks))
-            .map(|n| n.next_multiple_of(4));
-        if masks.is_none_or(|n| u32::try_from(n).ok() != Some(s.mask_and_quantization_size)) {
-            return Err(invalid(
-                0,
-                format!(
-                    "maskAndQuantizationSize {} disagrees with the track counts ({} transform tracks, {} float tracks)",
-                    s.mask_and_quantization_size, animation.transform_tracks, animation.float_tracks
-                ),
-            ));
-        }
-        if s.max_frames_per_block < 2
-            || s.num_frames == 0
-            || s.frame_duration.is_nan()
-            || s.frame_duration <= 0.0
-        {
-            return Err(invalid(
-                0,
-                "the animation's frame counts or duration are not usable",
-            ));
-        }
-        let blocks = s.num_blocks as usize;
-        if s.block_offsets.len() != blocks || s.float_block_offsets.len() != blocks || blocks == 0 {
-            return Err(invalid(0, "the block offsets do not match the block count"));
-        }
-        let mut out = Vec::with_capacity(blocks);
-        let mut floats = Vec::with_capacity(blocks);
+        let stored = SplineBlocks::read(animation)?;
+        Ok(SplineAnimation::decode(
+            &stored,
+            animation.duration,
+            s.num_frames,
+            s.max_frames_per_block,
+            s.frame_duration,
+        ))
+    }
+
+    /// The decoded values of stored blocks, with the header values a sample needs: control points scaled between
+    /// their bounds, quaternions unpacked. A non-finite static value or spline bound of a vector component makes that
+    /// component absent, and a non-finite quaternion is kept; both are named in [`SplineAnimation::unreadable`].
+    pub fn decode(
+        stored: &SplineBlocks,
+        duration: f32,
+        num_frames: u32,
+        max_frames_per_block: u32,
+        frame_duration: f32,
+    ) -> SplineAnimation {
         let mut unreadable = Vec::new();
-        // each block's start and float data offset, and where the next begins (the end of the data after the last)
-        let nexts = s
-            .block_offsets
-            .iter()
-            .skip(1)
-            .map(|&o| o as usize)
-            .chain([s.data.len()]);
-        let starts = s.block_offsets.iter().zip(&s.float_block_offsets).zip(nexts);
-        for (b, ((&start, &float), next)) in starts.enumerate() {
-            let start = start as usize;
-            if !start.is_multiple_of(16) {
-                return Err(invalid(start, "a block is not 16-byte aligned"));
+        let mut blocks = Vec::with_capacity(stored.blocks.len());
+        let mut floats = Vec::with_capacity(stored.blocks.len());
+        for (b, block) in stored.blocks.iter().enumerate() {
+            let mut tracks = Vec::with_capacity(block.tracks.len());
+            for (t, track) in block.tracks.iter().enumerate() {
+                let mut name = |part: &'static str, point: Option<usize>| {
+                    unreadable.push(Unreadable {
+                        block: b,
+                        track: t,
+                        part,
+                        point,
+                    });
+                };
+                let position = vector(
+                    &track.position,
+                    ["position x", "position y", "position z"],
+                    &mut name,
+                );
+                let rotation = rotation(&track.rotation, &mut name);
+                let scale = vector(&track.scale, ["scale x", "scale y", "scale z"], &mut name);
+                tracks.push(Track {
+                    position,
+                    rotation,
+                    scale,
+                });
             }
-            // `floatBlockOffsets` count from the block's own start
-            let float_start = start
-                .checked_add(float as usize)
-                .ok_or_else(|| invalid(start, format!("block {b}'s float data offset overflows")))?;
-            let mut r = Reader::at(&s.data, start)?;
-            let ends = Ends {
-                float_start,
-                next,
-                last: b.checked_add(1) == Some(blocks),
-            };
-            let (tracks, block_floats) = block(
-                &mut r,
-                animation.transform_tracks,
-                animation.float_tracks,
-                b,
-                ends,
-                &mut unreadable,
-            )?;
-            out.push(tracks);
-            floats.push(block_floats);
+            blocks.push(tracks);
+            floats.push(block.floats.iter().map(float_track).collect());
         }
-        Ok(SplineAnimation {
-            blocks: out,
+        SplineAnimation {
+            blocks,
             floats,
             unreadable,
-            duration: animation.duration,
-            num_frames: s.num_frames,
-            max_frames_per_block: s.max_frames_per_block,
-            frame_duration: s.frame_duration,
-        })
+            duration,
+            num_frames,
+            max_frames_per_block,
+            frame_duration,
+        }
     }
 }
 
-/// Where a block's tracks end: where its float data begins; and where, after padding to 16, the next block begins
-/// (the end of the data after the last).
-#[derive(Clone, Copy)]
-struct Ends {
-    float_start: usize,
-    next: usize,
-    /// Whether this is the animation's last block.
-    last: bool,
-}
-
-/// Part `axis` (0, 1 or 2: x, y, z) of a vector, from its three `names`.
-fn axis_part(names: [&'static str; 3], axis: usize) -> Result<&'static str> {
-    names
-        .get(axis)
-        .copied()
-        .ok_or_else(|| invalid(0, format!("axis {axis} of a vector")))
-}
-
-/// One block, number `index`: its transform tracks and its `float_tracks` float tracks, ending where `ends` says.
-fn block(
-    r: &mut Reader,
-    tracks: usize,
-    float_tracks: usize,
-    index: usize,
-    ends: Ends,
-    unreadable: &mut Vec<Unreadable>,
-) -> Result<(Vec<Track>, Vec<FloatTrack>)> {
-    let masks = (0..tracks).map(|_| mask(r)).collect::<Result<Vec<_>>>()?;
-    let float_masks = r.take(float_tracks)?.to_vec();
-    r.pad(4)?;
-    let mut out = Vec::with_capacity(tracks);
-    // the last track's rotation quantization code and where its rotation ends (where it would, if it is absent)
-    let mut last_rotation = None;
-    for (track, m) in masks.into_iter().enumerate() {
-        // a failure names where it is: the block, the track and which of its three parts
-        let at = |part: &'static str| {
-            move |e: Error| {
-                invalid(
-                    e.offset,
-                    format!("block {index} track {track} {part}: {}", e.detail),
+/// A stored vector decoded: a non-finite static value or spline bound makes its component absent, named by `bad`.
+fn vector(
+    v: &VectorData,
+    parts: [&'static str; 3],
+    bad: &mut impl FnMut(&'static str, Option<usize>),
+) -> Vector {
+    let mut decoded = [Component::Absent, Component::Absent, Component::Absent];
+    for ((out, stored), part) in decoded.iter_mut().zip(&v.components).zip(parts) {
+        *out = match stored {
+            ScalarData::Static(value) if value.is_finite() => Component::Static(*value),
+            ScalarData::Spline { min, max, values } if min.is_finite() && max.is_finite() => {
+                Component::Spline(
+                    values
+                        .iter()
+                        .map(|&q| v.quantization.value(*min, *max, q))
+                        .collect(),
                 )
             }
+            ScalarData::Static(_) | ScalarData::Spline { .. } => {
+                bad(part, None);
+                Component::Absent
+            }
+            ScalarData::Absent => Component::Absent,
         };
-        let mut bad = Vec::new();
-        let mut bad_points = Vec::new();
-        let position = vector(r, m.position_flags, m.position, &mut bad).map_err(at("position"))?;
-        for axis in bad.drain(..) {
-            unreadable.push(Unreadable {
-                block: index,
-                track,
-                part: axis_part(["position x", "position y", "position z"], axis)?,
-                point: None,
-            });
-        }
-        r.pad(4)?;
-        let rotation = rotation(r, m.rotation_flags, m.rotation, &mut bad_points).map_err(at("rotation"))?;
-        for point in bad_points.drain(..) {
-            unreadable.push(Unreadable {
-                block: index,
-                track,
-                part: "rotation",
-                point,
-            });
-        }
-        last_rotation = Some((m.rotation, r.position()));
-        r.pad(4)?;
-        let scale = vector(r, m.scale_flags, m.scale, &mut bad).map_err(at("scale"))?;
-        for axis in bad.drain(..) {
-            unreadable.push(Unreadable {
-                block: index,
-                track,
-                part: axis_part(["scale x", "scale y", "scale z"], axis)?,
-                point: None,
-            });
-        }
-        r.pad(4)?;
-        out.push(Track {
-            position,
-            rotation,
-            scale,
-        });
     }
-    let Ends {
-        float_start,
-        next,
-        last,
-    } = ends;
-    if r.position() != float_start {
-        return Err(invalid(
-            r.position(),
-            format!(
-                "block {index} ends at {}, the float data begins at {float_start}",
-                r.position()
-            ),
-        ));
+    let [x, y, z] = decoded;
+    Vector {
+        knots: v.knots.clone(),
+        x,
+        y,
+        z,
     }
-    let floats = float_masks
-        .iter()
-        .enumerate()
-        .map(|(i, &m)| {
-            float_track(r, m)
-                .map_err(|e| invalid(e.offset, format!("block {index} float track {i}: {}", e.detail)))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    r.pad(16)?;
-    if r.position() != next {
-        // The 2018.1 encoder pads the last block of an animation by 16 more zero bytes when the last track's rotation
-        // is 40 bits (code 1) and ends within two bytes of the padded end of the block: a 40-bit rotation is read with
-        // an 8-byte load, which must not run past the data. The rotation counts where it would be stored when its
-        // mask states none. In Elden Ring that is 4,975 of the 33,794 + 4,975 last blocks, exactly those the rule
-        // names, and no other block of either game has the bytes (Sekiro's 2016.2 data has none, though 1,243 of its
-        // last blocks have the geometry). They are accepted there and nowhere else. (After float data the rule cannot
-        // hold: the data is at least four bytes past the last rotation, and none of the 1,110 blocks with float tracks
-        // has the bytes.)
-        let extra = last
-            && last_rotation.is_some_and(|(code, end)| code == 1 && r.position().saturating_sub(end) < 3)
-            && r.position().checked_add(16) == Some(next)
-            && r.bytes()
-                .get(r.position()..next)
-                .is_some_and(|pad| pad.iter().all(|&b| b == 0));
-        if !extra {
-            return Err(invalid(
-                r.position(),
-                format!(
-                    "block {index} ends at {}, the next begins at {next}",
-                    r.position()
-                ),
-            ));
+}
+
+/// A stored rotation decoded. A quaternion stored as non-finite floats (only an uncompressed one can be) is kept as
+/// stored and named by `bad`: the control point of a spline, or `None` for a static rotation (see [`Unreadable`]).
+fn rotation(r: &RotationData, bad: &mut impl FnMut(&'static str, Option<usize>)) -> Rotation {
+    match &r.value {
+        QuaternionData::Absent => Rotation::Absent,
+        QuaternionData::Static(q) => {
+            let q = q.unpack();
+            if !q.iter().all(|v| v.is_finite()) {
+                bad("rotation", None);
+            }
+            Rotation::Static(q)
+        }
+        QuaternionData::Spline { knots, points } => {
+            let points: Vec<[f32; 4]> = points.iter().map(PackedQuaternion::unpack).collect();
+            for (i, p) in points.iter().enumerate() {
+                if !p.iter().all(|v| v.is_finite()) {
+                    bad("rotation", Some(i));
+                }
+            }
+            Rotation::Spline {
+                knots: knots.clone(),
+                points,
+            }
         }
     }
-    Ok((out, floats))
+}
+
+fn float_track(f: &FloatData) -> FloatTrack {
+    match f {
+        FloatData::Static(v) => FloatTrack::Static(*v),
+        FloatData::Spline {
+            knots,
+            min,
+            max,
+            values,
+        } => FloatTrack::Spline {
+            knots: knots.clone(),
+            points: values
+                .iter()
+                .map(|&q| ScalarQuantization::Bits16.value(*min, *max, q))
+                .collect(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -839,6 +379,7 @@ fn block(
 mod tests {
     use super::*;
     use crate::animation::{AnimationType, QsTransform, SplineData};
+    use crate::spline_data::{THREE_COMP40_STEP, THREE_COMP48_STEP};
 
     /// Positions and scales fall back to the reference, rotations to the identity.
     const MIXED: Absent = Absent {
@@ -1170,34 +711,18 @@ mod tests {
     #[test]
     fn the_quantized_quaternions_decode_by_their_bit_layouts() {
         let c: u64 = 0x7FF | (0x7FF << 12) | (0x7FF << 24) | (3 << 36);
-        let bytes = c.to_le_bytes();
-        let mut r = Reader::at(&bytes[..5], 0).unwrap();
-        assert_eq!(
-            quaternion(&mut r, RotationQuantization::ThreeComp40).unwrap(),
-            [0.0, 0.0, 0.0, 1.0]
-        );
+        let five = |c: u64| PackedQuaternion::ThreeComp40(c.to_le_bytes()[..5].try_into().unwrap());
+        assert_eq!(five(c).unpack(), [0.0, 0.0, 0.0, 1.0]);
         // the sign bit makes w -1
-        let c = c | (1 << 38);
-        let bytes = c.to_le_bytes();
-        let mut r = Reader::at(&bytes[..5], 0).unwrap();
-        assert_eq!(
-            quaternion(&mut r, RotationQuantization::ThreeComp40).unwrap(),
-            [0.0, 0.0, 0.0, -1.0]
-        );
+        assert_eq!(five(c | (1 << 38)).unpack(), [0.0, 0.0, 0.0, -1.0]);
         // 15-bit components at 0x3FFF are zero: the index is bit 15 of x and of y (x low, y high); index 0 is x
-        let words = [0x3FFFu16, 0x3FFF, 0x3FFF];
-        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let mut r = Reader::at(&bytes, 0).unwrap();
         assert_eq!(
-            quaternion(&mut r, RotationQuantization::ThreeComp48).unwrap(),
+            PackedQuaternion::ThreeComp48([0x3FFF, 0x3FFF, 0x3FFF]).unpack(),
             [1.0, 0.0, 0.0, 0.0]
         );
         // both bits set is index 3 (w); the sign bit of z negates it
-        let words = [0xBFFFu16, 0xBFFF, 0xBFFF];
-        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let mut r = Reader::at(&bytes, 0).unwrap();
         assert_eq!(
-            quaternion(&mut r, RotationQuantization::ThreeComp48).unwrap(),
+            PackedQuaternion::ThreeComp48([0xBFFF, 0xBFFF, 0xBFFF]).unpack(),
             [0.0, 0.0, 0.0, -1.0]
         );
     }

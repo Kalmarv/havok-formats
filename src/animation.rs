@@ -7,6 +7,7 @@
 //! (`hkaSkeleton`, `hkaBone`, `hkQsTransform`, `hkaSplineCompressedAnimation`, `hkaDefaultAnimatedReferenceFrame`,
 //! `hkaAnimationBinding`); a class or field the file does not have is an error naming it, never a default.
 
+pub use crate::animation_write::replace_animation;
 use crate::{Result, Tagfile, Value, invalid};
 
 /// `hkQsTransform`: translation, rotation (a quaternion, `x y z w`) and scale, each four floats as stored (the fourth
@@ -202,7 +203,8 @@ pub struct Container {
     pub bindings: Vec<Binding>,
 }
 
-fn named<'t, 'a>(tag: &'t Tagfile<'a>) -> Result<Value<'t, 'a>> {
+/// The root's one named variant of class `hkaAnimationContainer`.
+pub(crate) fn named<'t, 'a>(tag: &'t Tagfile<'a>) -> Result<Value<'t, 'a>> {
     let root = tag.root()?;
     let variants = root.field("namedVariants")?.array()?;
     for i in 0..variants.len() {

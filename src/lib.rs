@@ -82,6 +82,7 @@
 mod inputs;
 
 pub mod animation;
+mod animation_write;
 mod bvtree;
 pub mod cloth;
 pub mod convex;
@@ -91,6 +92,9 @@ pub mod packfile;
 mod section;
 mod simdtree;
 pub mod spline;
+mod spline_data;
+mod spline_encode;
+mod spline_fit;
 mod spline_sample;
 
 pub use bvtree::{

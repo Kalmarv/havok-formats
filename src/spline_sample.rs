@@ -10,7 +10,7 @@
     clippy::cast_possible_truncation
 )]
 
-use crate::animation::{Binding, QsTransform, Skeleton};
+use crate::animation::{Binding, InterleavedData, QsTransform, Skeleton};
 use crate::spline::{
     Absent, Component, Fallback, FloatTrack, Knots, Rotation, SplineAnimation, Track, Vector,
 };
@@ -88,15 +88,93 @@ impl SplineAnimation {
     /// A float track at `time` seconds.
     pub fn sample_float(&self, track: usize, time: f32) -> Result<f32> {
         let (block, frame) = self.locate(time)?;
+        float_value(self, block, track, frame)
+    }
+
+    /// The block holding frame `frame` (0 to `numFrames - 1`) and the frame within it, counted exactly: a frame two
+    /// blocks share is the later block's first, as [`Self::locate`] places it, and the last frame the last block's end.
+    pub fn locate_frame(&self, frame: u32) -> Result<(usize, f32)> {
+        let last_block = self
+            .blocks
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| invalid(0, "the animation has no blocks"))?;
+        let per_block = self
+            .max_frames_per_block
+            .checked_sub(1)
+            .filter(|&n| n > 0)
+            .ok_or_else(|| invalid(0, "expected at least 2 frames per block"))?;
+        if frame >= self.num_frames {
+            return Err(invalid(
+                0,
+                format!("frame {frame} of an animation of {} frames", self.num_frames),
+            ));
+        }
+        let block = usize::try_from(frame.checked_div(per_block).unwrap_or_default())
+            .map_err(|_| invalid(0, "block index"))?
+            .min(last_block);
+        let first = u32::try_from(block)
+            .ok()
+            .and_then(|b| b.checked_mul(per_block))
+            .ok_or_else(|| invalid(0, "block start"))?;
+        let within = frame
+            .checked_sub(first)
+            .ok_or_else(|| invalid(0, "frame before its block"))?;
+        // a frame within a block is below 256, exact in f32
+        let within = u16::try_from(within).map_err(|_| invalid(0, "frame within a block"))?;
+        Ok((block, f32::from(within)))
+    }
+
+    /// A track at frame `frame` (see [`Self::locate_frame`]); what the track does not state is `absent`'s fallback.
+    pub fn sample_frame(
+        &self,
+        track: usize,
+        frame: u32,
+        reference: &QsTransform,
+        absent: Absent,
+    ) -> Result<QsTransform> {
+        let (block, within) = self.locate_frame(frame)?;
         let t = self
-            .floats
+            .blocks
             .get(block)
             .and_then(|b| b.get(track))
-            .ok_or_else(|| invalid(0, format!("no float track {track}")))?;
-        match t {
-            FloatTrack::Static(v) => Ok(*v),
-            FloatTrack::Spline { knots, points } => spline_value(knots, points, frame),
+            .ok_or_else(|| invalid(0, format!("no track {track}")))?;
+        sample_track(t, within, reference, absent)
+    }
+
+    /// A float track at frame `frame` (see [`Self::locate_frame`]).
+    pub fn sample_float_frame(&self, track: usize, frame: u32) -> Result<f32> {
+        let (block, within) = self.locate_frame(frame)?;
+        float_value(self, block, track, within)
+    }
+
+    /// Every track at every frame, as an interleaved animation stores them: frame by frame, the transform tracks in
+    /// order (and the float tracks likewise). `references` holds one transform a transform track, what `absent`'s
+    /// [`Fallback::Reference`] stands for (the bone each drives; with [`Absent::NEUTRAL`] it is not read).
+    pub fn interleaved(&self, references: &[QsTransform], absent: Absent) -> Result<InterleavedData> {
+        let tracks = self.blocks.first().map_or(0, Vec::len);
+        let floats = self.floats.first().map_or(0, Vec::len);
+        if references.len() != tracks {
+            return Err(invalid(
+                0,
+                format!("{} reference transforms for {tracks} tracks", references.len()),
+            ));
         }
+        let frames = usize::try_from(self.num_frames).map_err(|_| invalid(0, "frames"))?;
+        let mut transforms = Vec::with_capacity(frames.saturating_mul(tracks));
+        let mut values = Vec::with_capacity(frames.saturating_mul(floats));
+        for frame in 0..self.num_frames {
+            for (track, reference) in references.iter().enumerate() {
+                transforms.push(self.sample_frame(track, frame, reference, absent)?);
+            }
+            for track in 0..floats {
+                values.push(self.sample_float_frame(track, frame)?);
+            }
+        }
+        Ok(InterleavedData {
+            transforms,
+            floats: values,
+        })
     }
 
     /// Every float slot of `skeleton` at `time` seconds: the slots a float track of `binding` drives sampled (a track
@@ -175,6 +253,19 @@ impl SplineAnimation {
             *pose.get_mut(bone).ok_or_else(outside)? = sampled;
         }
         Ok(pose)
+    }
+}
+
+/// Float track `track` of block `block` at `frame` within the block.
+fn float_value(a: &SplineAnimation, block: usize, track: usize, frame: f32) -> Result<f32> {
+    let t = a
+        .floats
+        .get(block)
+        .and_then(|b| b.get(track))
+        .ok_or_else(|| invalid(0, format!("no float track {track}")))?;
+    match t {
+        FloatTrack::Static(v) => Ok(*v),
+        FloatTrack::Spline { knots, points } => spline_value(knots, points, frame),
     }
 }
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+Spline compression written as well as read: the stored block values kept exactly, an encoder, and an animation written
+into its file.
+
+- `spline::SplineBlocks` (`read`, `write`, `guard_applies`) and its value types (`BlockData`, `TrackData`, `VectorData`,
+  `ScalarData`, `RotationData`, `QuaternionData`, `PackedQuaternion`, `FloatData`, `ScalarQuantization`,
+  `WrittenBlocks`): what a block stores, kept exactly (each part's whole flag byte, the quantization codes also of an
+  absent rotation, the bounds, the quantized integers, the packed quaternions, the 16 guard bytes), and laid out again.
+  Every one of the 60,209 spline animations of both installs (Sekiro 11,581, Elden Ring 48,628) is written back byte for
+  byte, the guard bytes exactly where Elden Ring has them (4,975). `SplineAnimation::parse` reads through it (same
+  refusals and messages); `SplineAnimation::decode` decodes stored values. `RotationQuantization::code`.
+- `spline::encode` and `encode_blocks`: an interleaved animation compressed as a spline compressed one, with
+  `TrackParams` (tolerances, degrees and quantizations of each part; `Default` and `TrackParams::compress_anim` are
+  `CompressAnim.exe`'s) and `EncodeParams` (frames a block, one `TrackParams` a track, the guard bytes, the arithmetic:
+  `Flavor::Games` or `Flavor::CompressAnim`). An error-bounded B-spline fit (*The NURBS Book* A9.10) in f32; no Havok
+  code. Re-encoding the decoded frames of every stock animation that stores no NaN (60,193) gives its stored header bit
+  for bit and 892 Sekiro and 4,554 Elden Ring animations byte for byte. With `EncodeParams::compress_anim`, the synthetic
+  cases of tests/compress_anim.rs get CompressAnim's header, layout, flags and knots, two of them byte for byte (the
+  others differ in the last bits of fitted values: the tool fits in x87 extended precision).
+- `SplineAnimation::locate_frame`, `sample_frame`, `sample_float_frame` and `interleaved`: every track at every stored
+  frame, the interleaved form.
+- `animation::replace_animation`: an animation written over the one a file stores (same class and track counts), the
+  rest of the file kept, as a `TagfileImage` to write. Put back unchanged, a stock file comes back byte for byte.
+
 ## 0.8.0 (2026-10-28)
 
 Cloth (`cloth`) reads the whole `hclClothData`: what a cloth runtime needs, checked on every distinct tagfile with cloth
