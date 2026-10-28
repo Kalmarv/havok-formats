@@ -78,6 +78,14 @@ impl<'t, 'a> Array<'t, 'a> {
         }
         self.tag.bytes(self.offset, self.count)
     }
+    /// The bytes of all the elements, as stored.
+    pub(crate) fn element_bytes(self) -> Result<&'a [u8]> {
+        if self.count == 0 {
+            return Ok(&[]);
+        }
+        let size = self.tag.extent(self.stride, self.count)?;
+        self.tag.bytes(self.offset, size)
+    }
     /// Element `index`; an error when it is out of bounds or runs past DATA.
     pub fn get(self, index: usize) -> Result<Value<'t, 'a>> {
         let offset = index

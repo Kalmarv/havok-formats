@@ -9,7 +9,8 @@
 //!   (`TCM0`): [`Tagfile`] and [`Compendium`]. Class layouts come from the file's own type metadata, so any class
 //!   can be read field by field through [`Value`] and [`Array`].
 //! - **Packfiles** (version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian): [`packfile`].
-//! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`]), extern triangle meshes ([`extern_mesh`]),
+//! - Objects read from them: `hknp` compressed meshes ([`compressed_mesh`], with their bounding-volume trees
+//!   [`mesh_trees`] and [`simd_tree`]), extern triangle meshes ([`extern_mesh`]),
 //!   convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, animation bindings and spline
 //!   compressed animation ([`animation`], [`spline`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles
 //!   ([`packfile::physics`]).
@@ -79,15 +80,21 @@
 mod inputs;
 
 pub mod animation;
+mod bvtree;
 pub mod cloth;
 pub mod convex;
 mod extern_mesh;
 mod mesh;
 pub mod packfile;
 mod section;
+mod simdtree;
 pub mod spline;
 mod spline_sample;
 
+pub use bvtree::{
+    BOUNDS_TOLERANCE_ULPS, BoundsCheck, BvNode, BvNodeKind, BvTree, MeshTrees, NodeWidth, SectionTree,
+    mesh_trees,
+};
 pub use extern_mesh::{ExternMesh, extern_mesh};
 pub use mesh::{
     CompressedMesh, CustomKind, CustomPrimitive, MeshSection, ShapeInstance, Triangle, compressed_mesh,
@@ -101,6 +108,7 @@ pub use types::{Compendium, Field, Type, TypeFlags};
 pub use value::{Array, Value};
 
 pub use section::{Section, sections};
+pub use simdtree::{LaneBox, SimdCheck, SimdLane, SimdNode, SimdTree, simd_tree};
 
 /// A refusal: what is wrong, at the byte offset where it was found.
 #[derive(Debug, thiserror::Error)]

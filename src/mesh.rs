@@ -1,3 +1,5 @@
+use crate::bvtree::{BoundsCheck, decode_trees};
+use crate::simdtree::{LivePrimitive, SimdCheck, check_against, simd_tree};
 use crate::{Result, Value, invalid};
 
 /// One triangle of a compressed mesh.
@@ -17,6 +19,10 @@ pub struct CompressedMesh {
     pub dead_primitives: usize,
     /// Primitives that are not triangles or quads, in key order.
     pub custom: Vec<CustomPrimitive>,
+    /// What decoding the mesh's bounding-volume trees found, and how its triangles and quads sit in their leaves' boxes.
+    pub bounds: BoundsCheck,
+    /// What testing the mesh's simd tree against its primitives found ([`simd_tree`]).
+    pub simd: SimdCheck,
 }
 
 /// A custom primitive of a mesh tree: one whose second and fourth indices are equal (`[k, x, n, x]`; no triangle or
@@ -177,6 +183,9 @@ pub struct MeshSection {
     /// The section's `domain` box, minimum then maximum (xyz): the box of its triangle vertices grown by the shape's
     /// convex radius in the Sekiro and Elden Ring map meshes.
     pub domain: [[f32; 3]; 2],
+    /// The node of the section's leaf in the mesh tree (`leafIndex`): the node index, not the leaf's ordinal among the
+    /// leaves. [`mesh_trees`](crate::mesh_trees) checks it against the decoded mesh tree.
+    pub leaf_index: usize,
 }
 /// An unsigned stored value as an index; a refusal at `at` when it does not fit the platform's `usize`.
 fn index(value: Value<'_, '_>, at: usize) -> Result<usize> {
@@ -186,7 +195,7 @@ fn index(value: Value<'_, '_>, at: usize) -> Result<usize> {
 }
 
 /// The `min` and `max` (xyz) of an `hkAabb` value.
-fn aabb(v: Value<'_, '_>) -> Result<[[f32; 3]; 2]> {
+pub(crate) fn aabb(v: Value<'_, '_>) -> Result<[[f32; 3]; 2]> {
     let min = v.field("min")?.vector::<4>()?;
     let max = v.field("max")?.vector::<4>()?;
     Ok([[min[0], min[1], min[2]], [max[0], max[1], max[2]]])
@@ -311,6 +320,7 @@ pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
             first_primitive,
             primitives,
             domain: aabb(section.field("domain")?)?,
+            leaf_index: field("leafIndex")?,
         });
     }
     for (what, end, len) in [
@@ -353,7 +363,13 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
     let shared_indices = array_of_width(tree, "sharedVerticesIndex", 2)?;
     let sections = tree.field("sections")?.array()?;
     let ranges = mesh_sections(data)?;
-    let mut result = CompressedMesh::default();
+    let trees = decode_trees(data, &ranges)?;
+    let mut result = CompressedMesh {
+        bounds: BoundsCheck::of_trees(&trees),
+        ..CompressedMesh::default()
+    };
+    // the triangles, quads and custom primitives the simd tree must name
+    let mut live: Vec<LivePrimitive> = Vec::new();
     for (section_index, range) in ranges.iter().enumerate() {
         let section = sections.get(section_index)?;
         let &MeshSection {
@@ -366,6 +382,7 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
             first_primitive: start,
             primitives: count,
             domain: _,
+            leaf_index: _,
         } = range;
         let offset = [codec[0], codec[1], codec[2]];
         let scale = [codec[3], codec[4], codec[5]];
@@ -479,23 +496,54 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
                     indices: ix,
                     kind,
                 });
+                live.push(LivePrimitive { key, vertices: None });
                 continue;
             }
             let a = vertex(ix[0])?;
             let b = vertex(ix[1])?;
             let c = vertex(ix[2])?;
+            let d = if ix[2] != ix[3] {
+                Some(vertex(ix[3])?)
+            } else {
+                None
+            };
+            // the primitive lies inside the box of its leaf in the section's tree
+            let tree = trees
+                .sections
+                .get(section_index)
+                .ok_or_else(|| invalid(section.at(), "a section without a tree"))?;
+            let mut excess = 0.0f64;
+            for v in [Some(a), Some(b), Some(c), d].into_iter().flatten() {
+                let ulps = tree.excess_ulps(i, v).ok_or_else(|| {
+                    invalid(section.at(), "a primitive without a leaf in its section's tree")
+                })?;
+                excess = excess.max(ulps);
+            }
+            result.bounds.record(excess);
+            let (mut low, mut high) = (a, a);
+            for v in [b, c].into_iter().chain(d) {
+                for ((low, high), v) in low.iter_mut().zip(high.iter_mut()).zip(v) {
+                    *low = low.min(v);
+                    *high = high.max(v);
+                }
+            }
+            live.push(LivePrimitive {
+                key,
+                vertices: Some(([low, high], range.domain.map(|corner| corner.map(f64::from)))),
+            });
             result.triangles.push(Triangle {
                 key,
                 vertices: [a, b, c],
             });
-            if ix[2] != ix[3] {
+            if let Some(d) = d {
                 result.triangles.push(Triangle {
                     key: key | 1,
-                    vertices: [a, c, vertex(ix[3])?],
+                    vertices: [a, c, d],
                 });
             }
         }
     }
+    result.simd = check_against(&simd_tree(data)?, &mut live, data)?;
     Ok(result)
 }
 

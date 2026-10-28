@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+Bounding-volume trees. `compressed_mesh` decodes and checks both levels of a mesh's static tree and its simd tree, and
+refuses a mesh whose trees do not hold together. Every compressed mesh of both installs' map, object and asset
+collision passes (Sekiro 3,344 mesh trees and 273,228 section trees; Elden Ring 22,899 and 722,405).
+
+- `BvTree::decode` and `mesh_trees`: the mesh tree (5-byte nodes, leaves are sections) and each section's tree
+  (4-byte nodes, leaves are primitives) as `BvTree`s of `BvNode`s with their boxes (box rule: a nibble `n` takes
+  `n^2 / 226` of the parent's extent from its side, the root from the tree's `domain`). Refused: a second child that is not
+  a later node inside its subtree, a leaf that does not end its subtree (so a node unreached or reached twice), a domain
+  that is not finite and ordered, leaves that do not cover `0..sections` / `0..numPrimitives` exactly once, a section
+  whose `leafIndex` is not its leaf's node in the mesh tree.
+- `CompressedMesh::bounds` (`BoundsCheck`): trees, nodes and leaves, and every triangle and quad tested against its
+  leaf's box, within `BOUNDS_TOLERANCE_ULPS` (16 `f32` ULPs at the largest magnitude of the coordinate, the box and the
+  tree's domain): a vertex outside is counted, not refused. None is outside in either install; the box rule leaves 13,490
+  Sekiro and 18,577 Elden Ring boxes inverted on an axis by under 0.1 mm (`BoundsCheck::inverted_boxes`), also not a refusal.
+- `simd_tree` and `CompressedMesh::simd` (`SimdCheck`): the four-lane `hkcdSimdTree` of `hknpCompressedMeshShapeData`
+  (`SimdTree`, `SimdNode`, `SimdLane`), read in both games' encodings (Sekiro tags each lane's data word, Elden Ring flags
+  the node). Refused: a first node that is not the empty sentinel, a lane whose box is empty where its data holds a child or leaf
+  (or the reverse), a child that is not a later node, a node that is not the child of exactly one lane, leaves that are not the
+  mesh's triangles, quads and custom primitives once each (a tree with no leaf is allowed), Elden Ring's `hasSimdTree`
+  against the leaves. The boxes (a child lane's against the union below it, a leaf's against its primitive's vertices) are counted.
+- `MeshSection::leaf_index` (new field): the node of the section's leaf in the mesh tree.
+- Breaking: `CompressedMesh` and `MeshSection` have new public fields.
+- Tests: hand-built trees and tagfile fixtures for every refusal; the real-data tests that read the corpora now read
+  the trees too (`tests/corpus.rs`, `tests/paged_mesh.rs`). The install-wide counts are `tests/bvtree_census.rs` of
+  `fromsoft-formats`.
+
 ## 0.5.0 (2026-10-27)
 
 Float tracks, and the cutscene binders' rotations, read. A read of both installs (19,137 + 68,722 distinct tagfiles) now
