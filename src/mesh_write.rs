@@ -1270,7 +1270,7 @@ mod tests {
             (0, 0, 0)
         );
         assert!(built.shared_vertices.is_empty() && built.shared_vertex_index.is_empty());
-        // both triangles have the box of the whole square, so their centres tie and the input order stands; each triangle
+        // both triangles have the box of the whole square, so their surfaces and leaf counts tie and the input order stands; each triangle
         // names its vertices by their slots of first use
         assert_eq!(built.primitives, [[0, 1, 2, 2], [1, 3, 2, 2]]);
         // the codec spans the unit box on x and y and is flat on z: x in the low 11 bits, y in the next 11, z in the top 10
