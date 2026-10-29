@@ -14,7 +14,9 @@ Sekiro and 7,438 Elden Ring tagfiles of both installs.
 - The reader refuses what the files never hold: streaming sets, a face that is not a ring of 3 or more edges, an edge in
   two faces or none, an opposite edge that does not point back or whose face is not its owner, a graph that does not tile
   its edges, a tree that is not a pre-order tree with every face once. Faces are triangulated by ear clipping in their own
-  plane (about 5 % of Sekiro's and 2 % of Elden Ring's faces are not convex, so a fan is wrong for them).
+  plane (about 5 % of Sekiro's and 2 % of Elden Ring's faces are not convex, so a fan is wrong for them); a cut is
+  dropped only when it has no area in 3-space, so a corner straight only in that plane keeps its triangle and every
+  face's triangles have its area vector.
 - The Sekiro graph is the cluster graph of its mesh (one node per `clusterIndex`, an edge for every pair of clusters
   that share an edge, both ways: 1,509 of 1,509 files); Elden Ring has no graph, no clusters, and user edges.
 

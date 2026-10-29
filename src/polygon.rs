@@ -89,8 +89,10 @@ pub(crate) fn plane(normal: [f64; 3]) -> (usize, usize, f64) {
 /// first corner and the second result is `false`.
 ///
 /// On the 279,053 faces of Sekiro's navmeshes and the 6,317,094 of Elden Ring's, ear clipping finishes on all but two
-/// (zero-area faces of Elden Ring), no triangle turns against its polygon in the projection plane, and the projected
-/// triangle areas add up to the polygon's within 1e-9 of it.
+/// (zero-area faces of Elden Ring), no triangle turns against its polygon in the projection plane, the projected
+/// triangle areas add up to the polygon's within 1e-9 of it, and the triangles' area vectors add up to the polygon's
+/// within 2e-11 of it: 602,658 triangles in Sekiro and 11,079,642 in Elden Ring, of which 208 and 3,826 are the
+/// triangles of corners straight only in the projection plane.
 pub fn triangulate(corners: &[[f64; 3]]) -> (Vec<[usize; 3]>, bool) {
     let count = corners.len();
     if count < 3 {
