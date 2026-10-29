@@ -17,6 +17,7 @@
 //! cloths are checked against the cloth data's lists.
 
 use crate::animation::{Skeleton, skeleton};
+use crate::enums::hcl::Platform;
 use crate::{Result, Tagfile, Value, invalid};
 
 mod buffers;
@@ -55,7 +56,8 @@ pub struct Cloth {
     /// `name`.
     pub name: String,
     /// `targetPlatform` (`hkEnum<Platform, hkUint32>`), as stored: 2 in all 610 `hclClothData` of Sekiro's and all 2,692 of
-    /// Elden Ring's distinct tagfiles. The files do not say what the value means.
+    /// Elden Ring's distinct tagfiles. The files do not say what the value means; HKLib's `Platform` names 2
+    /// `HCL_PLATFORM_X64` (see [`Cloth::platform`]).
     pub target_platform: u32,
     /// `simClothDatas`.
     pub sim_cloths: Vec<SimCloth>,
@@ -71,6 +73,13 @@ pub struct Cloth {
     pub state_transitions: Vec<StateTransition>,
     /// `actions`: the class of each action object.
     pub actions: Vec<String>,
+}
+
+impl Cloth {
+    /// The target platform, named; `None` for a stored number the enumeration does not name.
+    pub fn platform(&self) -> Option<Platform> {
+        Platform::from_value(i64::from(self.target_platform))
+    }
 }
 
 /// `hknpConstraintCinfo`: a constraint joining two bodies. Its atoms are not read: `data_class` names the constraint's

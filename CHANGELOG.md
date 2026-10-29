@@ -123,6 +123,38 @@ rebuilt from its decoded triangles, written into its file's image and read back.
   quantising them, where the stock tool worked from the ones before. `Layout::Stock` makes the writers use it
   (default `Layout::Sah`: unchanged).
 - `NodeWidth::Six` (new variant): `BvTree::decode` reads the 6-byte nodes of an extern mesh's aabb tree.
+
+Names for the numbers the files store: the enumerated members, the member declaration flags and the mesh-tree section
+flags. Counted over every distinct tagfile of Sekiro (19,127 read) and Elden Ring (68,722) and every one of the 490 Tony
+Hawk's SHRED packfiles; only values the files store are described as stored, and each name comes from a source that
+allows it (the class metadata of the SHRED files themselves for `MotionType`, `ResponseType` and `BroadPhaseType`; the
+Havok 6.6 headers for the other `hkp` ones; HKLib's 2018.1 classes for `hka`, `hknp` and `hcl`).
+
+- `enums`: `hkp::{MotionType, ResponseType, BroadPhaseType, WeldingType, IndexStridingType, MaterialIndexStridingType,
+  SubpartType, MoppBuildType}`, `hka::{BlendHint, ReferenceFrameType}`, `hknp::{MotionType, ShapeType}`,
+  `hcl::{ShapeType, Platform}`. Each enumeration has `ALL`, `value`, `name` and `from_value`; `hknp::ShapeType::of_class`
+  and `hcl::ShapeType::of_class` give the value of a shape class (an `hcl` shape stores no `type`; an `hknp` shape's
+  `type` is its class's value in every shape of both installs); `hka::BlendHint::name_in` gives the name an SDK uses
+  (1 and 2 are named only for 2018.1: Sekiro's 2016.2 sits between two renamings, and the files say nothing).
+  `hkpShape::type` has no enumeration: the SHRED metadata marks it not written.
+- `DeclFlags`, `DeclAccess` and `Field::decl_flags`: the member declaration flags named (not serialisable, protected,
+  private, data field), with the access bits checked against the Havok 6.6 headers on the 196 (class, member, flags)
+  combinations both declare, and the not-serialisable bit by the data (the bytes of every such member read zero, in 1.7
+  million reads of Sekiro's objects and 13.9 million of Elden Ring's). `Field::flags` stays the stored `u64`.
+- `SectionFlags`, `MeshSection::flags` and `MeshSection::layer_data` (new fields; code that builds or destructures a
+  `MeshSection` by all its fields needs them): the section `flags` byte is 0 or 1, 1 exactly on the sections that hold a
+  custom primitive (167 of 979,207 sections), and `layerData` is 0 in all. `mesh_sections` refuses a flags byte with
+  another bit and a `layerData` other than 0; `compressed_mesh` refuses a section whose flag disagrees with its custom
+  primitives, each by name.
+- `packfile::physics`: `RigidBody::broad_phase_type` (new field; a body whose broad-phase handle type is not
+  `BROAD_PHASE_ENTITY` is refused: all 12,789 are), `RigidBody::{motion, response}`, `ExtendedMesh::welding` and
+  `MoppCode::build` name the stored bytes (the fields stay as stored); the subpart reader checks
+  its three type bytes through the enumerations. The documented layout gains the broad-phase handle type (`+0x28`) and
+  the fact that the shape type word is not stored.
+- `animation::Binding::blend`, `cloth::Cloth::platform` and `cloth::Shape::shape_type`.
+- Tests: `tests/enums.rs` and the section-flag test in `src/mesh.rs` (new corpora `havok-enums`, a Sekiro and an Elden
+  Ring set of the smallest tagfiles that show each value), the SHRED metadata compared with the enumerations, the
+  hand-built packfile scene now stores its handle type.
 ## 0.8.1 (2026-10-28)
 
 Spline compression written as well as read: the stored block values kept exactly, an encoder, and an animation written

@@ -252,6 +252,31 @@ const SECTION_LAYOUTS: [([u8; 8], SectionLayout); 2] = [
     (*b"20160200", SectionLayout::Packed),
     (*b"20180100", SectionLayout::Fields),
 ];
+/// A mesh-tree section's `flags` byte, a bit set. Both installs store only 0 and 1 (Sekiro: 273,399 sections 0 and 10
+/// sections 1; Elden Ring: 705,641 and 157, counted over every distinct tagfile), and the bit is set on exactly the
+/// sections that hold a custom primitive ([`CustomPrimitive`], extern shape references and point sets alike): all 167
+/// flagged sections hold one, and none of the 979,040 others does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct SectionFlags(pub u8);
+
+impl SectionFlags {
+    /// Bit 0 (value 1): the section needs its bounding-volume tree to be read. The name is that of
+    /// `hkcdStaticMeshTree::Section::Flags::SF_REQUIRE_TREE` in HKX2Library's (MIT) reflected classes; the data agrees with
+    /// it where a custom primitive is decoded from the box of its own leaf in the section's tree.
+    pub const REQUIRE_TREE: u8 = 1;
+    /// The union of the bits any section of either install stores.
+    pub const SEEN: u8 = 1;
+
+    /// Whether every bit of `mask` is set.
+    pub fn contains(self, mask: u8) -> bool {
+        self.0 & mask == mask
+    }
+    /// The bits no section of either install stores, as stored.
+    pub fn unseen(self) -> u8 {
+        self.0 & !Self::SEEN
+    }
+}
+
 /// One section of a compressed mesh tree as stored, whichever SDK version stored it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshSection {
@@ -280,6 +305,11 @@ pub struct MeshSection {
     /// The node of the section's leaf in the mesh tree (`leafIndex`): the node index, not the leaf's ordinal among the
     /// leaves. [`mesh_trees`](crate::mesh_trees) checks it against the decoded mesh tree.
     pub leaf_index: usize,
+    /// The section's `flags` byte. A section with bits outside [`SectionFlags::SEEN`] is refused.
+    pub flags: SectionFlags,
+    /// The section's `layerData` byte: 0 in all 979,207 sections of Sekiro (273,409) and Elden Ring (705,798) counted over
+    /// every distinct tagfile, and a section that stores anything else is refused.
+    pub layer_data: u8,
 }
 /// An unsigned stored value as an index; a refusal at `at` when it does not fit the platform's `usize`.
 fn index(value: Value<'_, '_>, at: usize) -> Result<usize> {
@@ -404,6 +434,28 @@ pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
         packed_at = packed_at.checked_add(packed_vertices).ok_or_else(overflow)?;
         shared_at = shared_at.checked_add(shared_indices).ok_or_else(overflow)?;
         primitive_at = primitive_at.checked_add(primitives).ok_or_else(overflow)?;
+        let flags = u8::try_from(field("flags")?)
+            .ok()
+            .map(SectionFlags)
+            .filter(|f| f.unseen() == 0)
+            .ok_or_else(|| {
+                invalid(
+                    section.at(),
+                    format!(
+                        "section {i}: flags are not a bit set within {:#x}, the bits the sections of both installs use",
+                        SectionFlags::SEEN
+                    ),
+                )
+            })?;
+        let layer_data = u8::try_from(field("layerData")?)
+            .ok()
+            .filter(|&b| b == 0)
+            .ok_or_else(|| {
+                invalid(
+                    section.at(),
+                    format!("section {i}: layerData is not 0, as in every section of both installs"),
+                )
+            })?;
         out.push(MeshSection {
             codec: section.field("codecParms")?.vector::<6>()?,
             first_packed_vertex,
@@ -415,6 +467,8 @@ pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
             primitives,
             domain: aabb(section.field("domain")?)?,
             leaf_index: field("leafIndex")?,
+            flags,
+            layer_data,
         });
     }
     for (what, end, len) in [
@@ -478,6 +532,8 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
             primitives: count,
             domain: _,
             leaf_index: _,
+            flags: _,
+            layer_data: _,
         } = range;
         let offset = [codec[0], codec[1], codec[2]];
         let scale = [codec[3], codec[4], codec[5]];
@@ -663,6 +719,7 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
             }
         }
     }
+    check_section_flags(&ranges, &result.custom, &sections)?;
     result.simd = check_against(&simd_tree(data)?, &mut live, data)?;
     Ok(result)
 }
@@ -743,6 +800,34 @@ pub fn interior_primitives(data: Value<'_, '_>) -> Result<Vec<InteriorPrimitive>
     primitives_of(&view, false)
 }
 
+/// Each section's [`SectionFlags::REQUIRE_TREE`] bit must be set exactly when the section holds a custom primitive: so it
+/// is on all 167 flagged sections of the two installs and none of the other 979,040. `sections` are the tree's section
+/// values, where a refusal is placed.
+fn check_section_flags(
+    ranges: &[MeshSection],
+    custom: &[CustomPrimitive],
+    sections: &crate::Array<'_, '_>,
+) -> Result<()> {
+    let mut holds = vec![false; ranges.len()];
+    for c in custom {
+        if let Some(slot) = usize::try_from(c.key >> 8).ok().and_then(|i| holds.get_mut(i)) {
+            *slot = true;
+        }
+    }
+    for (i, (range, &has_custom)) in ranges.iter().zip(&holds).enumerate() {
+        let flagged = range.flags.contains(SectionFlags::REQUIRE_TREE);
+        if flagged != has_custom {
+            let detail = if flagged {
+                format!("section {i} is flagged as needing its tree but holds no custom primitive")
+            } else {
+                format!("section {i} holds a custom primitive but is not flagged as needing its tree")
+            };
+            return Err(invalid(sections.get(i)?.at(), detail));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -752,7 +837,7 @@ pub fn interior_primitives(data: Value<'_, '_>) -> Result<Vec<InteriorPrimitive>
 )]
 mod tests {
     use crate::inputs::{Game, OracleSet, Query, expect_found, resolve};
-    use crate::{Compendium, Tagfile, mesh_sections};
+    use crate::{Compendium, SectionFlags, Tagfile, compressed_mesh, mesh_sections};
 
     /// The tagfile, with its own types or the first compendium that has them.
     fn read<'a>(bytes: &'a [u8], compendia: &[Compendium]) -> Tagfile<'a> {
@@ -827,5 +912,128 @@ mod tests {
                 .to_string();
             assert!(e.contains(want), "{e}");
         }
+    }
+
+    /// The tagfiles and compendia of a game's `havok-enums` corpus; `None` without it.
+    fn enums_corpus(game: Game) -> Option<(Vec<Vec<u8>>, Vec<Compendium>)> {
+        let corpus = Query::Oracle(OracleSet::Corpus, game, "havok-enums");
+        let dir = resolve(corpus)?;
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        files.sort();
+        let with = |ext: &str| {
+            files
+                .iter()
+                .filter(|p| p.extension().is_some_and(|e| e == ext))
+                .map(|p| std::fs::read(p).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let compendia = with("compendium");
+        let compendia: Vec<_> = compendia.iter().map(|b| Compendium::read(b).unwrap()).collect();
+        let tagfiles = with("hkx");
+        expect_found(corpus, ".hkx files", tagfiles.len());
+        Some((tagfiles, compendia))
+    }
+
+    /// The first mesh of the corpus with a section that is flagged (or, with `flagged` false, one that is not): its
+    /// file's bytes, the item of its data and the section's index.
+    fn find_section(
+        tagfiles: &[Vec<u8>],
+        compendia: &[Compendium],
+        flagged: bool,
+    ) -> (Vec<u8>, usize, usize) {
+        for bytes in tagfiles {
+            let tag = read(bytes, compendia);
+            for item in 1..tag.items.len() {
+                let Some(data) = tag.item(item).ok().and_then(|a| a.get(0).ok()) else {
+                    continue;
+                };
+                if data.type_name() != "hknpCompressedMeshShapeData" {
+                    continue;
+                }
+                let sections = mesh_sections(data).unwrap();
+                if let Some(i) = sections
+                    .iter()
+                    .position(|s| s.flags.contains(SectionFlags::REQUIRE_TREE) == flagged)
+                {
+                    return (bytes.clone(), item, i);
+                }
+            }
+        }
+        panic!("no mesh with a section of flagged = {flagged}");
+    }
+
+    /// A section's `flags` and `layerData` are checked. In the Sekiro corpus (the smallest tagfile with each kind of
+    /// mesh): a flagged section holds the two custom primitives its mesh has, and an unflagged one none. A flags byte
+    /// with a bit beyond bit 0, a layerData other than 0, and a flag that disagrees with the custom primitives are each
+    /// refused by name. Skips without the corpus.
+    #[test]
+    fn section_flags_and_layer_data_are_checked() {
+        let Some((tagfiles, compendia)) = enums_corpus(Game::Sekiro) else {
+            return;
+        };
+        let field_at = |bytes: &[u8], item: usize, section: usize, name: &str| {
+            let tag = read(bytes, &compendia);
+            tag.item(item)
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .field("meshTree")
+                .unwrap()
+                .field("sections")
+                .unwrap()
+                .array()
+                .unwrap()
+                .get(section)
+                .unwrap()
+                .field(name)
+                .unwrap()
+                .at()
+        };
+        let read_mesh = |bytes: &[u8], item: usize| {
+            let tag = read(bytes, &compendia);
+            compressed_mesh(tag.item(item).unwrap().get(0).unwrap()).map(|m| m.custom.len())
+        };
+        let patched = |bytes: &[u8], at: usize, value: u8| {
+            let mut copy = bytes.to_vec();
+            *copy.get_mut(at).unwrap() = value;
+            copy
+        };
+
+        // a flagged section: the mesh reads, with two custom primitives; its flag cleared, the section is refused
+        let (bytes, item, section) = find_section(&tagfiles, &compendia, true);
+        assert_eq!(read_mesh(&bytes, item).unwrap(), 2);
+        let at = field_at(&bytes, item, section, "flags");
+        assert_eq!(bytes.get(at), Some(&1));
+        let e = read_mesh(&patched(&bytes, at, 0), item).unwrap_err().to_string();
+        assert!(e.contains("holds a custom primitive but is not flagged"), "{e}");
+        // a bit beyond bit 0
+        for value in [2, 3, 0x80] {
+            let e = read_mesh(&patched(&bytes, at, value), item)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains("flags are not a bit set within 0x1"),
+                "{value:#x}: {e}"
+            );
+        }
+        // layerData
+        let at = field_at(&bytes, item, section, "layerData");
+        assert_eq!(bytes.get(at), Some(&0));
+        let e = read_mesh(&patched(&bytes, at, 1), item).unwrap_err().to_string();
+        assert!(e.contains("layerData is not 0"), "{e}");
+
+        // an unflagged section: the mesh reads with none; flagged, the section is refused
+        let (bytes, item, section) = find_section(&tagfiles, &compendia, false);
+        assert_eq!(read_mesh(&bytes, item).unwrap(), 0);
+        let at = field_at(&bytes, item, section, "flags");
+        assert_eq!(bytes.get(at), Some(&0));
+        let e = read_mesh(&patched(&bytes, at, 1), item).unwrap_err().to_string();
+        assert!(
+            e.contains("flagged as needing its tree but holds no custom primitive"),
+            "{e}"
+        );
     }
 }

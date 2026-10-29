@@ -3,6 +3,7 @@
 //! table in `src/packfile/physics.rs` cites runs in primase, outside this repository:
 //! <https://github.com/Kalmarv/primase/tree/main/worlds/shred/tests/collision_disc.rs>.
 #![allow(clippy::unwrap_used)]
+use havok_formats::enums::hkp::{BroadPhaseType, MotionType, ResponseType, WeldingType};
 use havok_formats::packfile::physics::{
     self, ConvexVertices, ExtendedMesh, ListChild, MOTION_BOX_INERTIA, MOTION_FIXED, MoppCode, RigidBody,
     Shape,
@@ -170,6 +171,7 @@ fn scene_builder() -> Builder {
     b.u32(0x40 + 0x14, 0xFFFF_FFFF);
     b.local(0x40 + 0x74, 0x2C0);
     b.data[0x2C0..0x2C5].copy_from_slice(b"Box1\0");
+    b.data[0x40 + 0x28] = 1; // the broad-phase handle's type: BROAD_PHASE_ENTITY
     b.data[0x40 + 0x8C] = 1;
     b.f32(0x40 + 0x90, 0.5);
     b.f32(0x40 + 0x94, 0.25);
@@ -205,6 +207,15 @@ fn rigid_body_and_box() {
     assert_eq!(body.motion_type, MOTION_FIXED);
     assert_eq!((body.friction, body.restitution), (0.5, 0.25));
     assert_eq!((body.collision_filter_info, body.storage_index), (7, 3));
+    // the enumerated members, named
+    assert_eq!(body.motion(), Some(MotionType::Fixed));
+    assert_eq!(body.response(), Some(ResponseType::SimpleContact));
+    assert_eq!(body.broad_phase_type, BroadPhaseType::Entity);
+    let filter = body.filter();
+    assert_eq!(
+        (filter.layer(), filter.sub_system_id(), filter.system_group()),
+        (7, 0, 0)
+    );
     // world = 1*c0 + 2*c1 + 3*c2 + t = (0,0,-1) + (0,2,0) + (3,0,0) + (10,20,30)
     assert_eq!(body.to_world([1.0, 2.0, 3.0]), [13.0, 22.0, 29.0]);
     assert_eq!(
@@ -403,6 +414,16 @@ fn header_words_and_class_signatures_are_kept() {
         physics::census(&p).unknown.get("hkpSomeClassNotInTheCorpus"),
         Some(&1)
     );
+}
+
+#[test]
+fn a_broad_phase_handle_that_is_not_an_entity_is_refused() {
+    for handle_type in [0, 2, 3, 4, 0xFF] {
+        let mut b = scene_builder();
+        b.data[0x40 + 0x28] = handle_type;
+        let e = refusal(&b.build(), |p| RigidBody::read(p, 0x40));
+        assert!(e.contains("BROAD_PHASE_ENTITY"), "{handle_type}: {e}");
+    }
 }
 
 #[test]
@@ -796,6 +817,9 @@ fn an_extended_mesh_reads_its_trailing_members() {
         ),
         (1, 0x30, 1, 0.001, 1)
     );
+    // 1 is no value of the welding type (0, 4, 5 and 6 are)
+    assert_eq!(m.welding(), None);
+    assert_eq!(WeldingType::from_value(6), Some(WeldingType::None));
     // a cached count equal to the triangle count is allowed, one above it is not
     let mut b = mesh_builder();
     b.u32(0x40 + 0xE0, 2);

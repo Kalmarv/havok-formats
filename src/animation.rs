@@ -8,6 +8,7 @@
 //! `hkaAnimationBinding`); a class or field the file does not have is an error naming it, never a default.
 
 pub use crate::animation_write::replace_animation;
+use crate::enums::hka::BlendHint;
 use crate::{Result, Tagfile, Value, invalid};
 
 /// `hkQsTransform`: translation, rotation (a quaternion, `x y z w`) and scale, each four floats as stored (the fourth
@@ -51,6 +52,11 @@ pub struct Skeleton {
 /// `hkaAnimation::AnimationType`, as the file's `type` field, numbered as the 2014 and later SDKs number it (the
 /// tagfiles this crate reads); older SDKs number it differently (spline compressed is 5 in 2010). The class name,
 /// not this value, decides how an animation is read.
+///
+/// Over every distinct tagfile, each class stores one value in all its animations: `hkaInterleavedUncompressedAnimation`
+/// 1 (Sekiro 2,443, Elden Ring 153), `hkaSplineCompressedAnimation` 3 (Sekiro 11,571, Elden Ring 48,628) and
+/// `hkaQuantizedAnimation` 4 (Sekiro 431, Elden Ring none). The values 0, 2, 5 and 6 occur in no file. The names are
+/// HKLib's, from its 2018.1 classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimationType {
     /// Value 0: unknown.
@@ -188,8 +194,16 @@ pub struct Binding {
     pub float_track_to_slot: Vec<i16>,
     /// `partitionIndices`, as stored.
     pub partition_indices: Vec<i16>,
-    /// `blendHint`, as stored.
+    /// `blendHint`, as stored: 0, 1 or 2 (see [`Binding::blend`]).
     pub blend_hint: u32,
+}
+
+impl Binding {
+    /// The blend hint, named; `None` for a stored number the enumeration does not name. Which composition 1 and 2 mean
+    /// is not told by the files (see [`BlendHint`]).
+    pub fn blend(&self) -> Option<BlendHint> {
+        BlendHint::from_value(i64::from(self.blend_hint))
+    }
 }
 
 /// `hkaAnimationContainer`.

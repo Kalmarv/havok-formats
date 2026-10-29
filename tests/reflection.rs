@@ -155,9 +155,10 @@ fn the_padding_rule_changes_nothing_in_these_classes() -> Result<(), Box<dyn std
 
 /// The offsets `packfile::physics` states by hand, for the classes the metadata of the ragdoll files covers: the class
 /// table gives the same ones (`class`, member path, offset).
-const PHYSICS_OFFSETS: [(&str, &[&str], usize); 41] = [
+const PHYSICS_OFFSETS: [(&str, &[&str], usize); 42] = [
     ("hkpRigidBody", &["collidable", "shape"], 0x10),
     ("hkpRigidBody", &["collidable", "shapeKey"], 0x14),
+    ("hkpRigidBody", &["collidable", "broadPhaseHandle", "type"], 0x28),
     (
         "hkpRigidBody",
         &["collidable", "broadPhaseHandle", "objectQualityType"],

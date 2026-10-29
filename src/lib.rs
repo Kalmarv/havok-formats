@@ -31,6 +31,11 @@
 //!   flags, [`interior_keys`]) and
 //!   [`replace_compressed_mesh`] puts them into the shape of a [`TagfileImage`]; [`replace_extern_mesh`] does the same
 //!   for an extern mesh. The layouts come from the file's own type table.
+//! - Names for the enumerated members the files store as numbers ([`enums`]: `hkp` motion, response, broad-phase,
+//!   welding, striding, subpart and MOPP build types; `hka` blend hints and reference
+//!   frames; `hknp` motion and shape types; `hcl` shape types and platforms), the member declaration flags
+//!   ([`DeclFlags`]: who may reach a member, whether it is written) and the mesh-tree section flags
+//!   ([`SectionFlags`]).
 //!
 //! It was written against Sekiro (tagfiles, 2016.2; packfiles, versions 9 and 11), Elden Ring (tagfiles, 2018.1;
 //! packfiles, versions 9 and 11) and Tony Hawk's SHRED for PS3 (packfiles, version 7).
@@ -108,6 +113,7 @@ pub mod cloth;
 pub mod constraint;
 pub mod convex;
 mod degenerate;
+pub mod enums;
 mod extern_mesh;
 mod extern_write;
 mod gamesort;
@@ -148,8 +154,8 @@ pub use interior::{
     InteriorPrimitive, MeshView, SectionView, game_sort, interior_keys, primitives_of, rsqrt_estimate,
 };
 pub use mesh::{
-    CompressedMesh, CustomKind, CustomPrimitive, MeshSection, PointSet, ShapeInstance, Triangle,
-    compressed_mesh, extern_shapes, interior_primitives, mesh_sections,
+    CompressedMesh, CustomKind, CustomPrimitive, MeshSection, PointSet, SectionFlags, ShapeInstance,
+    Triangle, compressed_mesh, extern_shapes, interior_primitives, mesh_sections,
 };
 pub use mesh_write::{
     BuildOptions, BuiltMesh, BuiltSection, Layout, MAX_PRIMITIVES, MAX_SLOTS, MeshSource, Primitives,
@@ -165,7 +171,7 @@ mod value;
 pub mod xml;
 pub use tagfile::{Item, ItemKind, SDK_VERSIONS, Tagfile};
 pub use tagfile_write::{ImageItem, TagfileImage};
-pub use types::{Compendium, Field, Type, TypeFlags};
+pub use types::{Compendium, DeclAccess, DeclFlags, Field, Type, TypeFlags};
 pub use value::{Array, HALF_FORMAT, Value};
 
 pub use section::{Section, sections};

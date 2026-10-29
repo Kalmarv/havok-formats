@@ -115,6 +115,17 @@ primase_testdata::inputs! {
             gate: false,
             about: r#"seven navmesh tagfiles of the install (`hkaiNavMesh` beside an `hkaiStaticTreeNavMeshQueryMediator` and, in two, an `hkaiUserEdgeSetupArray`, Elden Ring's 2018.1 files), loose, each carrying its own type table, and `manifest.tsv` with the counts of each: an empty mesh, the smallest and the largest with a tree, an empty tree, the smallest and the largest with user edges, and the one with a face that ear clipping cannot finish; tests/navmesh.rs reads them"#,
             source: r#"the game's own files from the user's install: members of the `nvmhktbnd` binders of `m10`, `m12`, `m13`, `m34`, `m60_47_38` and `m60_49_37`, out of their DCX envelopes as stored, picked by reading all 7,438 navmesh tagfiles of the 695 binders"#,
+        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-enums") => {
+            status: Live,
+            gate: false,
+            about: r#"the smallest self-contained or compendium-bound tagfile of the Sekiro install that shows each value of the enumerated members tests/enums.rs names: 24 tagfiles with 5 compendia, loose, and `manifest.tsv` (file, size, binder member, the values it was picked for); tests/enums.rs and tests/mesh.rs read them"#,
+            source: r#"the game's own files from the user's install: every archive entry walked (named or not, nested BND4 and DCX opened), each distinct TAG0 member counted for the values of the enumerated members of the animation, collision and cloth classes, and for each value the smallest tagfile with it taken out of its DCX envelope, with the compendium its types need"#,
+        },
+        Query::Oracle(OracleSet::Corpus, Game::Elden, "havok-enums") => {
+            status: Live,
+            gate: false,
+            about: r#"the same for the Elden Ring install: 29 tagfiles with 3 compendia, loose, and `manifest.tsv`; tests/enums.rs reads them"#,
+            source: r#"the game's own files from the user's install, found as for Sekiro"#,
         },
     }
     debug {}

@@ -10,13 +10,14 @@
 //! |---|---|---|---|
 //! | hkpRigidBody | shape pointer | `+0x10` | never null; its class is a known shape |
 //! | | shape key | `+0x14` | `0xFFFFFFFF` in every body |
-//! | | collisionFilterInfo (of the collidable's broad-phase handle) | `+0x2C` | 0, 2, 7, 11, 15 or 18 in the data |
+//! | | broad-phase handle type (u8) | `+0x28` | 1 ([`BroadPhaseType::Entity`]) in all 12,789 bodies |
+//! | | collisionFilterInfo (of the collidable's broad-phase handle) | `+0x2C` | 0, 2, 7, 11, 15 or 18 in the data; layers only ([`FilterInfo`]) |
 //! | | quality type (i8) | `+0x2A` | 0 in the fixed bodies, 4 in the dynamic ones |
 //! | | allowed penetration depth | `+0x5C` | `0x7F7FFFEE` in the fixed bodies, 0.015 to 0.635 in the dynamic ones |
 //! | | name pointer | `+0x74` | C string in every body |
-//! | | material: response type (u8), friction, restitution | `+0x8C`, `+0x90`, `+0x94` | type 1 in every body; finite |
+//! | | material: response type (u8), friction, restitution | `+0x8C`, `+0x90`, `+0x94` | type 1 ([`ResponseType::SimpleContact`]) in every body; finite |
 //! | | storageIndex (u16), contactPointCallbackDelay (u16) | `+0xA8`, `+0xAA` | 540 distinct indices from 0; delay `0xFFFF` in every body |
-//! | | motion type (u8) | `+0xE8` | 2, 3 or 5 (sphere inertia, box inertia, fixed); fixed = all 1,758 meshes |
+//! | | motion type (u8) | `+0xE8` | 2, 3 or 5 ([`MotionType`]: sphere inertia, box inertia, fixed); fixed = all 1,758 meshes |
 //! | | swept transform: centres of mass 0 and 1 (xyz), rotations 0 and 1 | `+0x130`, `+0x140`; `+0x150`, `+0x160` | equal pairs, in all 12,789 bodies |
 //! | | centre of mass in the body's frame | `+0x170` | |
 //! | | objectRadius, linear and angular damping | `+0x190`, `+0x194`, `+0x198` | |
@@ -32,14 +33,14 @@
 //! | | numBitsForSubpartIndex | `+0xB0` | 12 |
 //! | | trianglesSubparts (hkArray, 96-byte elements) | `+0xB4` | |
 //! | | weldingInfo (hkArray of u16) | `+0xCC` | length = total triangles |
-//! | | weldingType (u8), defaultCollisionFilterInfo, cachedNumChildShapes, triangleRadius | `+0xD8`, `+0xDC`, `+0xE0`, `+0xE4` | 0; 0; at most the triangle count (equal in 1,277 of 1,758); 0.001. `+0xD9..+0xDC` and `+0xE8..+0xF0` are zero |
+//! | | weldingType (u8), defaultCollisionFilterInfo, cachedNumChildShapes, triangleRadius | `+0xD8`, `+0xDC`, `+0xE0`, `+0xE4` | 0 ([`WeldingType::Anticlockwise`]); 0; at most the triangle count (equal in 1,277 of 1,758); 0.001. `+0xD9..+0xDC` and `+0xE8..+0xF0` are zero |
 //! | | shape storage (hkArray) | `+0xFC` | empty in every mesh; the body is 0x110 bytes |
 //! | | meshStorage (hkArray of pointers) | `+0xF0` | length = subparts; each a MeshSubpartStorage |
-//! | TrianglesSubpart (96 B) | type (u8), materialIndexStridingType (u8), materialStriding (i16) | `+0x00`, `+0x01`, `+0x02` | 0 (triangles), 2 (16-bit indices), 12 |
+//! | TrianglesSubpart (96 B) | type (u8), materialIndexStridingType (u8), materialStriding (i16) | `+0x00`, `+0x01`, `+0x02` | 0 ([`SubpartType::Triangles`]), 2 ([`MaterialIndexStridingType::Int16`]), 12 |
 //! | | materialIndexStriding (u16), numMaterials (u16) | `+0x08`, `+0x0A` | 2; = storage material count |
 //! | | triangle count, vertex striding, vertex count | `+0x14`, `+0x1C`, `+0x20` | = storage; 16 |
 //! | | extrusion (vec4) | `+0x30` | zero |
-//! | | index striding, striding type (u8), flipAlternateTriangles (i8) | `+0x44`, `+0x48`, `+0x49` | 16 bytes (4 u32 per triangle); 3 (32-bit); 0 |
+//! | | index striding, striding type (u8), flipAlternateTriangles (i8) | `+0x44`, `+0x48`, `+0x49` | 16 bytes (4 u32 per triangle); 3 ([`IndexStridingType::Int32`]); 0 |
 //! | | triangle offset | `+0x4C` | cumulative triangles of the earlier subparts |
 //! | | userData | `+0x50` | zero |
 //! | | the pointers materialIndexBase, materialBase, materialClass, vertexBase, indexBase | `+0x04`, `+0x0C`, `+0x10`, `+0x18`, `+0x40` | zero (the storage holds the arrays) |
@@ -66,10 +67,10 @@
 //! | hkpMoppBvTreeShape | code pointer | `+0x14` | an `hkpMoppCode` |
 //! | hkpMoppCode | `info.offset` (xyz), scale (w) | `+0x10` | offset = the mesh's minimum corner (1,704 codes over a mesh) |
 //! | | code (hkArray of bytes) | `+0x20` | its data follows the 0x30-byte body, the object is exactly `0x30 + length` bytes (1,705) |
-//! | | buildType (i8) | `+0x2C` | 0; `+0x00..+0x10` and `+0x2D..+0x30` are zero |
+//! | | buildType (i8) | `+0x2C` | 0 ([`MoppBuildType::BuiltWithChunkSubdivision`]); `+0x00..+0x10` and `+0x2D..+0x30` are zero |
 //! | hkpConvexVerticesConnectivity | vertexIndices (hkArray of u16), numVerticesPerFace (hkArray of u8) | `+0x08`, `+0x14` | the counts add up to the index count and every index names a vertex (8,751) |
 //! | every shape | userData | `+0x08` | 0 but in 583 convex-vertices shapes of box-inertia bodies and 45 extended meshes (1) |
-//! | | shape type | `+0x0C` | 0 in all 15,935 shapes ([`shape_user_data`]) |
+//! | | shape type | `+0x0C` | 0 in all 15,935 shapes ([`shape_user_data`]): the metadata of the eight reflection-bearing files marks the member `SERIALIZE_IGNORED`, so no value is stored |
 //!
 //! Every array header has the capacity word `size | 0x80000000` (an empty array has no fixup) and every pointer slot
 //! holds zero whether or not it has a fixup; see [`Packfile::array_header`] and [`Packfile::pointer`].
@@ -85,6 +86,10 @@ use std::collections::BTreeMap;
 
 use super::Packfile;
 use crate::Result;
+use crate::enums::hkp::{
+    BroadPhaseType, IndexStridingType, MaterialIndexStridingType, MoppBuildType, MotionType, ResponseType,
+    SubpartType, WeldingType,
+};
 
 /// Classes decoded by this module.
 pub const DECODED: [&str; 20] = [
@@ -147,7 +152,8 @@ pub fn rigid_bodies(pack: &Packfile<'_>) -> Vec<usize> {
 
 /// `hkpMotion::MotionType` 0: invalid. The values are 7.1's (the enum is part of the `hkpRigidBody` signature the
 /// files store); other Havok versions and other engines number motions differently. The data holds only 2, 3 and 5,
-/// and [`RigidBody::read`] accepts only those.
+/// and [`RigidBody::read`] accepts only those. The enumeration with its names is [`MotionType`]; these constants stay
+/// for the `u8` the body stores.
 pub const MOTION_INVALID: u8 = 0;
 /// Motion type 1: dynamic.
 pub const MOTION_DYNAMIC: u8 = 1;
@@ -232,17 +238,22 @@ pub struct RigidBody {
     pub shape: usize,
     /// The body's name.
     pub name: String,
-    /// `hkpMaterial` response type (1 = simple contact).
+    /// `hkpMaterial` response type, as stored: 1 ([`ResponseType::SimpleContact`]) in every body; see
+    /// [`RigidBody::response`].
     pub response_type: u8,
     /// Material friction.
     pub friction: f32,
     /// Material restitution.
     pub restitution: f32,
-    /// The collidable's `collisionFilterInfo` (its broad-phase handle's, at `+0x2C`), kept whole.
+    /// The collidable's `collisionFilterInfo` (its broad-phase handle's, at `+0x2C`), kept whole; see
+    /// [`RigidBody::filter`].
     pub collision_filter_info: u32,
+    /// The type of the collidable's broad-phase handle (`+0x28`): [`BroadPhaseType::Entity`] in all 12,789 bodies, and
+    /// a body that stores another value is refused.
+    pub broad_phase_type: BroadPhaseType,
     /// `storageIndex` (`+0xA8`): the body's index in its storage, as stored.
     pub storage_index: u16,
-    /// `hkpMotion::MotionType`; 2, 3 or 5 are accepted.
+    /// `hkpMotion::MotionType`, as stored; 2, 3 or 5 are accepted (see [`RigidBody::motion`]).
     pub motion_type: u8,
     /// Rotation as three columns: `world = x*c0 + y*c1 + z*c2 + translation`.
     pub rotation: [[f32; 3]; 3],
@@ -288,6 +299,15 @@ impl RigidBody {
         }
         let name = pack.c_string(pack.target(at(0x74)?, "rigid body name")?)?;
         let response_type = pack.u8(at(0x8C)?)?;
+        let handle_type = at(0x28)?;
+        let broad_phase_type = BroadPhaseType::from_value(i64::from(pack.u8(handle_type)?))
+            .filter(|&t| t == BroadPhaseType::Entity)
+            .ok_or_else(|| {
+                pack.err(
+                    handle_type,
+                    "the broad-phase handle type is not BROAD_PHASE_ENTITY",
+                )
+            })?;
         if pack.u16(at(0xAA)?)? != 0xFFFF {
             return Err(pack.err(at(0xAA)?, "contactPointCallbackDelay is not 0xFFFF"));
         }
@@ -348,6 +368,7 @@ impl RigidBody {
             friction: pack.f32(at(0x90)?)?,
             restitution: pack.f32(at(0x94)?)?,
             collision_filter_info: pack.u32(at(0x2C)?)?,
+            broad_phase_type,
             storage_index: pack.u16(at(0xA8)?)?,
             motion_type,
             rotation,
@@ -362,6 +383,17 @@ impl RigidBody {
             center_of_mass_local: pack.floats::<3>(at(0x170)?)?,
             gravity_factor: half(pack, at(0x1FE)?)?,
         })
+    }
+
+    /// The motion type, named; `None` for a stored number the enumeration does not name (the reader accepts only 2,
+    /// 3 and 5).
+    pub fn motion(&self) -> Option<MotionType> {
+        MotionType::from_value(i64::from(self.motion_type))
+    }
+
+    /// The material's response type, named; `None` for a stored number the enumeration does not name.
+    pub fn response(&self) -> Option<ResponseType> {
+        ResponseType::from_value(i64::from(self.response_type))
     }
 
     /// The body's collision filter word, split (see [`FilterInfo`]).
@@ -448,7 +480,8 @@ pub struct ExtendedMesh {
     pub subparts: Vec<Subpart>,
     /// Per triangle (all subparts in order), the 16-bit welding info.
     pub welding: Vec<u16>,
-    /// `weldingType` (`+0xD8`): 0 in every mesh of the corpus.
+    /// `weldingType` (`+0xD8`), as stored: 0 in every mesh of the corpus ([`WeldingType::Anticlockwise`]); see
+    /// [`ExtendedMesh::welding`].
     pub welding_type: u8,
     /// `defaultCollisionFilterInfo` (`+0xDC`): 0 in every mesh of the corpus.
     pub default_collision_filter_info: u32,
@@ -541,6 +574,11 @@ impl ExtendedMesh {
         })
     }
 
+    /// The welding type, named; `None` for a stored number the enumeration does not name.
+    pub fn welding(&self) -> Option<WeldingType> {
+        WeldingType::from_value(i64::from(self.welding_type))
+    }
+
     /// The triangles of all subparts.
     pub fn triangle_count(&self) -> usize {
         self.subparts.iter().map(|s| s.triangles.len()).sum()
@@ -550,10 +588,12 @@ impl ExtendedMesh {
 fn read_subpart(pack: &Packfile<'_>, sub: usize, store: usize, expected_offset: usize) -> Result<Subpart> {
     let sa = |add| pack.at(sub, add);
     let ta = |add| pack.at(store, add);
-    if pack.u8(sa(0x00)?)? != 0 {
+    if SubpartType::from_value(i64::from(pack.u8(sa(0x00)?)?)) != Some(SubpartType::Triangles) {
         return Err(pack.err(sa(0x00)?, "subpart type is not triangles"));
     }
-    if pack.u8(sa(0x01)?)? != 2 {
+    if MaterialIndexStridingType::from_value(i64::from(pack.u8(sa(0x01)?)?))
+        != Some(MaterialIndexStridingType::Int16)
+    {
         return Err(pack.err(sa(0x01)?, "material index striding type is not 16-bit"));
     }
     if pack.u16(sa(0x02)?)? != 12 {
@@ -577,7 +617,7 @@ fn read_subpart(pack: &Packfile<'_>, sub: usize, store: usize, expected_offset: 
     if pack.u32(sa(0x1C)?)? != 16 || pack.u32(sa(0x44)?)? != 16 {
         return Err(pack.err(sa(0x1C)?, "vertex or index striding is not 16"));
     }
-    if pack.u8(sa(0x48)?)? != 3 {
+    if IndexStridingType::from_value(i64::from(pack.u8(sa(0x48)?)?)) != Some(IndexStridingType::Int32) {
         return Err(pack.err(sa(0x48)?, "index striding type is not 32-bit"));
     }
     if pack.count(sa(TRIANGLE_OFFSET)?)? != expected_offset {
@@ -784,13 +824,19 @@ pub struct MoppCode {
     /// `info.offset`'s `w` (`+0x1C`): the code's scale. Over a mesh, `scale` times the mesh box's longest extent over
     /// `2^24` rounds to 0.99 in all 1,704 codes.
     pub scale: f32,
-    /// `buildType` (`+0x2C`): 0 in every code of the corpus.
+    /// `buildType` (`+0x2C`), as stored: 0 in every code of the corpus ([`MoppBuildType::BuiltWithChunkSubdivision`]); see
+    /// [`MoppCode::build`].
     pub build_type: i8,
     /// The code bytes (the array at `+0x20`; its data follows the 0x30-byte body).
     pub code: Vec<u8>,
 }
 
 impl MoppCode {
+    /// The build type, named; `None` for a stored number the enumeration does not name.
+    pub fn build(&self) -> Option<MoppBuildType> {
+        MoppBuildType::from_value(i64::from(self.build_type))
+    }
+
     /// The MOPP code at data-section `offset`.
     pub fn read(pack: &Packfile<'_>, offset: usize) -> Result<Self> {
         pack.require_710()?;

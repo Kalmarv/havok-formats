@@ -81,20 +81,104 @@ impl TypeFlags {
     }
 }
 
+/// A member's declaration flags (HKLib's `hkReflect::Decl::DeclFlagBits` of the 2018 SDK), a bit set: the low bits
+/// say whether the member is stored and who may reach it in the class, bit 5 that it is a data field. The type tables
+/// of every distinct tagfile of Sekiro and Elden Ring store the values `0x20` to `0x25` only, so only bits 0, 1, 2 and
+/// 5 occur. Counting each (class, member, flags) once: Sekiro has 1,925 (`0x20` public 1,506, `0x21` public and not
+/// serialisable 43, `0x22` protected 110, `0x23` protected and not serialisable 80, `0x24` private 77, `0x25` private
+/// and not serialisable 109) and Elden Ring 2,210 (1,742, 46, 132, 93, 77 and 120).
+///
+/// The names of bits 1 and 2 are checked against class headers the tables do not come from. Of the 196 (class, member,
+/// flags) combinations in the tables of either game whose class and member (the header's `m_name`) the Havok 6.6
+/// headers declare as well (the oldest SDK whose headers are public): the 3 the headers declare `protected:` all store
+/// `0x22`; of the 17 the headers declare `private:`, 16 store `0x24` and one `0x22` (`hkFlags::storage`, which another
+/// instance of the template stores as `0x24`); of the 176 the headers declare `public:`, 174 store neither access bit
+/// and two do (`hkxVertexFloatDataChannel::perVertexFloats`, `0x22`, and `hkReferencedObject::memSizeAndFlags`, `0x25`).
+/// The opposite assignment of the two bits would fail on 19 of the 20 non-public combinations. Bit 0 is checked by the
+/// data itself (see [`DeclFlags::NOT_SERIALIZABLE`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct DeclFlags(pub u32);
+
+/// Who may reach a member in its class, from [`DeclFlags::access`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeclAccess {
+    /// Neither access bit: a public member.
+    Public,
+    /// Bit 1 (`DECL_PROTECTED`).
+    Protected,
+    /// Bit 2 (`DECL_PRIVATE`).
+    Private,
+}
+
+impl DeclFlags {
+    /// Bit 0 (value 1, `DECL_NOT_SERIALIZABLE`): the member is declared but its value is not written. The type
+    /// tables keep its offset; the bytes there are zero every time they are read: Sekiro 183 (class, member) pairs read
+    /// 1,737,907 times, Elden Ring 205 pairs read 13,901,700 times (in a run of structs, its first 16 elements), none
+    /// nonzero.
+    pub const NOT_SERIALIZABLE: u32 = 1;
+    /// Bit 1 (value 2, `DECL_PROTECTED`): the member is protected in its class. Stored with `0x20` (`0x22`) or with
+    /// bit 0 (`0x23`); never with the private bit.
+    pub const PROTECTED: u32 = 2;
+    /// Bit 2 (value 4, `DECL_PRIVATE`): the member is private in its class. Stored as `0x24` and `0x25`; never with the
+    /// protected bit.
+    pub const PRIVATE: u32 = 4;
+    /// Bit 3 (value 8, `DECL_HIDDEN`): in no type table.
+    pub const HIDDEN: u32 = 8;
+    /// Bit 4 (value 16, `DECL_PROPERTY_FIELD`): in no type table.
+    pub const PROPERTY_FIELD: u32 = 16;
+    /// Bit 5 (value 32, `DECL_DATA_FIELD`): set on every member record of both installs.
+    pub const DATA_FIELD: u32 = 32;
+    /// Bit 6 (value 64, `DECL_CUSTOM_SETTER`): in no type table.
+    pub const CUSTOM_SETTER: u32 = 64;
+    /// The union of the bits any member record of either install stores.
+    pub const SEEN: u32 = 0x27;
+
+    /// Whether every bit of `mask` is set.
+    pub fn contains(self, mask: u32) -> bool {
+        self.0 & mask == mask
+    }
+    /// The bits no member record of either install stores, as stored.
+    pub fn unseen(self) -> u32 {
+        self.0 & !Self::SEEN
+    }
+    /// Whether the member's value is written to the file (bit 0 clear).
+    pub fn serialized(self) -> bool {
+        !self.contains(Self::NOT_SERIALIZABLE)
+    }
+    /// The member's access in its class; `None` when both access bits are set (no record of either install has
+    /// them).
+    pub fn access(self) -> Option<DeclAccess> {
+        match (self.contains(Self::PROTECTED), self.contains(Self::PRIVATE)) {
+            (false, false) => Some(DeclAccess::Public),
+            (true, false) => Some(DeclAccess::Protected),
+            (false, true) => Some(DeclAccess::Private),
+            (true, true) => None,
+        }
+    }
+}
+
 /// A member of a class.
 #[derive(Debug, Clone)]
 pub struct Field {
     /// The member's name.
     pub name: String,
-    /// The member's stored flags. The 816,249 member records of the distinct type tables of Sekiro (149,035) and Elden
-    /// Ring (667,214) store `0x20` to `0x25`: `0x20` is set on every record, and with it every combination of `0x01`,
-    /// `0x02` and `0x04` occurs but `0x02` together with `0x04`. A record without `0x20`, or with a bit outside `0x27`,
-    /// is refused. What `0x01`, `0x02` and `0x04` mean is not told by the data.
+    /// The member's stored flags, kept whole; [`Field::decl_flags`] names the bits. The 816,249 member records of the
+    /// distinct type tables of Sekiro (149,035) and Elden Ring (667,214) store `0x20` to `0x25`: `0x20` is set on every
+    /// record, and with it every combination of `0x01`, `0x02` and `0x04` occurs but `0x02` together with `0x04`. A
+    /// record without `0x20`, or with a bit outside `0x27`, is refused.
     pub flags: u64,
     /// Byte offset within the object.
     pub offset: usize,
     /// The member's type.
     pub type_index: usize,
+}
+
+impl Field {
+    /// The member's declaration flags, named. The type reader refuses a record with a bit outside
+    /// [`DeclFlags::SEEN`], so the conversion keeps every bit of a field it returned.
+    pub fn decl_flags(&self) -> DeclFlags {
+        DeclFlags(u32::try_from(self.flags).unwrap_or(u32::MAX))
+    }
 }
 
 /// A `TCM0` type compendium: the type table shared by several tagfiles, which name it by an id.
@@ -1004,6 +1088,31 @@ mod tests {
                 "{flags:#x}: {error}"
             );
         }
+    }
+
+    /// The six stored values of the member flags name who may reach the member and whether its value is written.
+    #[test]
+    fn member_flags_name_their_access_and_storage() {
+        let want = [
+            (0x20, DeclAccess::Public, true),
+            (0x21, DeclAccess::Public, false),
+            (0x22, DeclAccess::Protected, true),
+            (0x23, DeclAccess::Protected, false),
+            (0x24, DeclAccess::Private, true),
+            (0x25, DeclAccess::Private, false),
+        ];
+        for (flags, access, serialized) in want {
+            let types = read(&type_section(&with_member_flags(flags), &[])).expect("flags in the data");
+            let decl = types[2].fields[0].decl_flags();
+            assert_eq!(decl.access(), Some(access), "{flags:#x}");
+            assert_eq!(decl.serialized(), serialized, "{flags:#x}");
+            assert!(decl.contains(DeclFlags::DATA_FIELD), "{flags:#x}");
+            assert_eq!(decl.unseen(), 0, "{flags:#x}");
+        }
+        // both access bits: within 0x27, so the reader accepts the record, and neither access names it
+        let types = read(&type_section(&with_member_flags(0x26), &[])).expect("0x26 is within 0x27");
+        assert_eq!(types[2].fields[0].decl_flags().access(), None);
+        assert_eq!(DeclFlags(0x28 | 0x20).unseen(), 0x08);
     }
 
     /// A type that stores a subtype is a pointer (6) or an array (8), by its own format or its nearest parent's.

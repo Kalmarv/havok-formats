@@ -1,6 +1,7 @@
 //! A sim cloth's collidables (`hclCollidable`) and their shapes (`hclShape` and the classes derived from it).
 
 use super::{flag, items, matrix, real, sim::signed8, text, vec4};
+use crate::enums::hcl::ShapeType;
 use crate::{Result, Value, invalid};
 
 /// The shape of a collidable, by its class. The `type` member every shape stores is 0 in both installs; the class says
@@ -91,6 +92,22 @@ pub enum Shape {
         /// The shape's class name.
         class: String,
     },
+}
+
+impl Shape {
+    /// The `hclShapeType` of the shape's class. The shape's own `type` member is not stored, so this is the only way
+    /// to name it; `None` for a class of the `Other` variant that is not one of the shape classes of HKLib's 2018.1
+    /// reflection.
+    pub fn shape_type(&self) -> Option<ShapeType> {
+        match self {
+            Self::Sphere { .. } => Some(ShapeType::Sphere),
+            Self::Capsule { .. } => Some(ShapeType::Capsule),
+            Self::TaperedCapsule { .. } => Some(ShapeType::TaperedCapsule),
+            Self::Plane { .. } => Some(ShapeType::Plane),
+            Self::ConvexGeometry { .. } => Some(ShapeType::ConvexGeometry),
+            Self::Other { class } => ShapeType::of_class(class),
+        }
+    }
 }
 
 /// `hclCollidable`.
