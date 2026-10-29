@@ -453,7 +453,7 @@ pub enum Primitives {
     Triangles,
     /// Triangles that [`pair_quads`] pairs are joined into quad primitives (the first half's key has the half bit clear,
     /// the second half's set), as the stock tool does for about a quarter of its triangles. The pairs are looked for over
-    /// the whole mesh before the sections are cut, where the stock tool pairs within a section.
+    /// the whole mesh before the sections are cut, as the stock tool does.
     PairedQuads,
 }
 

@@ -91,11 +91,11 @@ rebuilt from its decoded triangles, written into its file's image and read back.
 - `pair_quads`, `QuadCandidate`, `game_sort_by` (new), `build_compressed_mesh_with` and `Primitives` (new):
   which triangles the stock tool joins into quads (the shared edge is the third edge of one and the first edge of the
   other, with another vertex opposite and the same primitive data; candidates costed by the surface increase of their
-  merged boxes and taken greedily; both lists sorted with the stock quicksort). It finds 99.4% of the 3,507,426 stock
-  quads of Sekiro and 99.2% of the 7,568,285 of Elden Ring, and 99.5% and 99.4% of what it finds are stock quads;
-  where it picks a stock pair it puts the stock first half first every time. The Sekiro object meshes come out lowest
-  (88.7%). `Primitives::PairedQuads` makes the writers join the pairs into quad primitives (default `Triangles`:
-  `build_compressed_mesh` is unchanged); `game_sort` is now `game_sort_by` on pairs.
+  merged boxes and taken greedily; both lists sorted with the stock quicksort). Run on a whole mesh it makes 99.3% of
+  the 3,507,426 stock quads of Sekiro and 99.1% of the 7,568,285 of Elden Ring, and 99.5% and 99.3% of what it makes
+  are stock quads; for the stock pairs it makes it puts the stock first half first every time. The Sekiro object meshes
+  come out lowest (86.0%). `Primitives::PairedQuads` makes the writers join the pairs into quad primitives (default
+  `Triangles`: `build_compressed_mesh` is unchanged); `game_sort` is now `game_sort_by` on pairs.
 - `NodeWidth::Six` (new variant): `BvTree::decode` reads the 6-byte nodes of an extern mesh's aabb tree.
 ## 0.8.1 (2026-10-28)
 

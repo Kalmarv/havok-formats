@@ -1,16 +1,16 @@
 //! Which triangles the stock tool joins into quads. A quad primitive stores four vertices `[a, b, c, d]` and stands for the
 //! triangles `a b c` and `a c d`; the two halves share the diagonal `c a`, which is the third edge of the first and the
 //! first edge of the second. The rule below was read off the stock meshes (see the engine wiki's page on Havok collision
-//! for the census): it picks the same pairs as the stock tool for 99.4% of the stock quads of Sekiro and 99.2% of Elden
-//! Ring's (a pair counted when both triangles are the same two source triangles), and for every stock quad it picks, it
+//! for the census): run on all the source triangles of a mesh at once, it makes 99.3% of the stock quads of Sekiro and
+//! 99.1% of Elden Ring's (a pair counts when it is the same two source triangles), and for every stock quad it makes it
 //! puts the same triangle first.
 //!
-//! 1. The triangles of one group (the stock tool does this per section) give each distinct vertex position a number, in
-//!    the order the triangles first use it. Every triangle contributes its three edges as records `(lower number, higher
-//!    number, triangle, edge)`, the edge `n` running from corner `n` to the next one.
+//! 1. The triangles give each distinct vertex position a number, in the order the triangles first use it. Every triangle
+//!    contributes its three edges as records `(lower number, higher number, triangle, edge)`, the edge `n` running from
+//!    corner `n` to the next one.
 //! 2. The records are sorted by the two numbers with the stock tool's quicksort ([`game_sort_by`]); that sort is not stable,
 //!    so which of several triangles on one edge comes first follows from its procedure.
-//! 3. For each record in turn, the first later record with the same two numbers that fits makes a candidate: the other
+//! 3. For each record in turn, the first later record on the same two vertices that fits makes a candidate: the other
 //!    triangle runs the edge the other way, has another vertex opposite it, has the same primitive data, and the two edges
 //!    are a third edge and a first edge (so the first half of the quad is the triangle whose third edge is shared).
 //! 4. A candidate costs the increase of box surface the pair brings: for the two triangles' boxes `A` and `B` and the box
@@ -18,8 +18,9 @@
 //!    The candidates are sorted by cost with the same quicksort and taken in that order, skipping one whose triangle is
 //!    taken already.
 //!
-//! Where the stock tool differs: among edges that many (eight or more) triangles share, the stock pairs are not always the
-//! ones the order of the records gives; the Sekiro object meshes, which have most of those, come out at 88.7%.
+//! Where the stock tool differs: among edges that three or more triangles share, the stock pairs are not always the ones
+//! the order of the records gives; the Sekiro object meshes, which have most of those, come out at 86.0%. The stock tool
+//! numbers vertices by the index of a welded source vertex, which the stock files do not keep; positions stand for that here.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -98,8 +99,8 @@ fn merge_cost(a: &[V3; 3], b: &[V3; 3]) -> f32 {
 }
 
 /// The pairs of `triangles` the stock tool would join into quads, each as `[first half, second half]` by index, in the
-/// order they were taken. A triangle is in at most one pair. The triangles are one group (a section of the mesh being
-/// built: pair triangles of different sections, and they are never offered together).
+/// order they were taken. A triangle is in at most one pair. Offer the triangles of a whole mesh at once: the stock tool
+/// pairs before it cuts sections.
 pub fn pair_quads(triangles: &[QuadCandidate]) -> Vec<[usize; 2]> {
     // vertex numbers, by position bits, in order of first use
     let mut by_position: BTreeMap<[u32; 3], usize> = BTreeMap::new();
