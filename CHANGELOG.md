@@ -99,7 +99,7 @@ rebuilt from its decoded triangles, written into its file's image and read back.
 - `section_numbering` (new): the order in which a section holds its primitives. They are numbered in the pre-order of the
   section's tree and then sorted by data-run index with the stock quicksort; every key in a section is equal, so the result is a
   permutation of the count alone. Every section tree of the Sekiro and Elden Ring collision follows it (the leaf payloads in
-  file order, 273,137 and 720,603 trees of two leaves or more, none off); `Layout::Stock` stores primitives that way.
+  file order, 273,148 and 721,282 trees of two leaves or more, which is all of them, none off); `Layout::Stock` stores primitives that way.
 - `StockTree`, `Box3`, `BuildOptions` and `Layout` (new): the tree the stock tool builds over a mesh's primitives and cuts
   into sections, read off the stock meshes. Leaves are inserted one by one into a box tree by a descent rule, listed left to
   right, rebuilt top down (32 bins per axis by the place of the centre, best of three axes by the summed surfaces from both
