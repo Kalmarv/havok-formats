@@ -194,7 +194,7 @@ fn definitions(sdk: &[u8; 8], class: &'static str) -> Vec<Definition> {
                 ("triangleIndexToShapeKey", 136, ARRAY_U32),
             ],
         ), // 33
-        fixed("T[N]<hkUint8,4>", 4, U8, 1), // 34
+        fixed("T[N]<hkUint8,4>", 4, U8, 1),                              // 34
     ]
 }
 

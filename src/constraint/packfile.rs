@@ -159,7 +159,7 @@ pub struct BallSocket {
     pub bodies_to_notify: u8,
     /// `stabilizationFactor`, the byte stored: 48 (`0x30`) in all 161.
     pub stabilization_factor: u8,
-    /// `maxImpulse`: `f32::MAX` (`0x7F7FFFEE`) in all 161.
+    /// `maxImpulse`: `3.40282e38` (`0x7F7FFFEE`, just short of `f32::MAX`) in all 161.
     pub max_impulse: f32,
 }
 

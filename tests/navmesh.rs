@@ -5,7 +5,10 @@
 //! The expected counts of each file are those a census of the binders measured with its own reading of the same
 //! tagfiles (faces, edges, user edges, vertices, clustered faces, graph nodes and edges, tree nodes, user-edge setups,
 //! data words) and, for the triangles, with a triangulator whose output the census checked face by face (no triangle
-//! turns against its face, the projected areas add up). The census read all 1,509 Sekiro and 7,438 Elden Ring
+//! turns against its face, the projected areas add up). Two Elden Ring files' triangle counts are instead the count
+//! a face of n corners whose clipping finishes must give, n - 2 less one per corner on the line of its neighbours in
+//! 3-space: their faces include corners straight only seen from above, whose triangles the census's triangulator
+//! dropped. The census read all 1,509 Sekiro and 7,438 Elden Ring
 //! navmesh tagfiles of both installs; this test reads twelve of them. The files were picked as the smallest and the
 //! largest of each combination of objects, an empty mesh of each, the largest with user-edge setups and the one with a
 //! face that ear clipping cannot finish.
@@ -148,7 +151,7 @@ const ELDEN: &[Expected] = &[
         user_edges: 5760,
         vertices: 50278,
         clustered_faces: 0,
-        triangles: 47566,
+        triangles: 47574,
         incomplete_faces: 0,
         graph: None,
         tree_nodes: Some(50525),
@@ -178,7 +181,7 @@ const ELDEN: &[Expected] = &[
         user_edges: 17017,
         vertices: 58710,
         clustered_faces: 0,
-        triangles: 31502,
+        triangles: 31504,
         incomplete_faces: 0,
         graph: None,
         tree_nodes: Some(42869),

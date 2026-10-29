@@ -18,6 +18,17 @@ fn at(corners: &[[f64; 3]], i: usize) -> [f64; 3] {
     corners.get(i).copied().unwrap_or([0.0; 3])
 }
 
+/// Whether the triangle of these three corners has area in 3-space (its edges' cross product is not zero).
+fn has_area(corners: &[[f64; 3]], triangle: [usize; 3]) -> bool {
+    let [a, b, c] = triangle.map(|i| at(corners, i));
+    let [u, v] = [b, c].map(|p| [p[0] - a[0], p[1] - a[1], p[2] - a[2]]);
+    [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ] != [0.0; 3]
+}
+
 /// The polygon's Newell vector: its normal scaled by twice its area, for a polygon whose corners run counter-clockwise
 /// seen from the normal's side.
 pub(crate) fn newell(corners: &[[f64; 3]]) -> [f64; 3] {
@@ -69,7 +80,10 @@ pub(crate) fn plane(normal: [f64; 3]) -> (usize, usize, f64) {
 /// whether ear clipping finished. A polygon of fewer than three corners gives none.
 ///
 /// Every corner that turns the way the polygon does (or is straight) and has no other corner of the ring inside its
-/// triangle is cut off in turn; a cut of zero area (a straight corner) is dropped, so its triangle is not returned.
+/// triangle is cut off in turn; a cut with no area in 3-space (a corner on the line of its neighbours, or one repeating
+/// a neighbour) is dropped, so its triangle is not returned. A corner that is straight only in the projection plane
+/// (one that bends off it, as at a step) is kept: its triangle has area, and with it the triangles' area vectors add up
+/// to the polygon's, as those of any triangulation of one boundary do.
 /// Corners at the same position as one of the triangle's own do not block it, since a face may touch itself at a
 /// repeated vertex. If no ear is left (a polygon that is not simple, or one with no area) the rest is fanned from its
 /// first corner and the second result is `false`.
@@ -135,11 +149,11 @@ pub fn triangulate(corners: &[[f64; 3]]) -> (Vec<[usize; 3]>, bool) {
                     && inside(c, a, position) >= 0.0
             });
             if !blocked {
-                clipped = Some((i, [a, b, c], area));
+                clipped = Some((i, [a, b, c]));
                 break;
             }
         }
-        let Some((i, triangle, area)) = clipped else {
+        let Some((i, triangle)) = clipped else {
             for pair in ring.get(1..).unwrap_or_default().windows(2) {
                 if let (Some(&first), Some(&second), Some(&origin)) =
                     (pair.first(), pair.get(1), ring.first())
@@ -149,13 +163,13 @@ pub fn triangulate(corners: &[[f64; 3]]) -> (Vec<[usize; 3]>, bool) {
             }
             return (triangles, false);
         };
-        if area > 0.0 {
+        if has_area(corners, triangle) {
             triangles.push(triangle);
         }
         ring.remove(i);
     }
     if let &[a, b, c] = ring.as_slice()
-        && turn(a, b, c) != 0.0
+        && has_area(corners, [a, b, c])
     {
         triangles.push([a, b, c]);
     }
@@ -248,6 +262,27 @@ mod tests {
         assert_eq!(triangles.len(), 3);
         assert!(turns(&line, &triangles).iter().all(|&t| t > 0.0), "{triangles:?}");
         assert!((area(&line, &triangles).abs() - 8.0).abs() < 1e-12);
+    }
+
+    /// A corner straight only seen from above (corner 1, which steps up off the line from 0 to 2) keeps its triangle:
+    /// it has area in 3-space, and the two triangles' area vectors add up to the polygon's.
+    #[test]
+    fn a_corner_straight_only_in_projection_keeps_its_triangle() {
+        let step = [[0.0, 0.0, 0.0], [1.0, 0.5, 0.0], [2.0, 0.0, 0.0], [0.0, 0.0, 2.0]];
+        let (triangles, clean) = triangulate(&step);
+        assert!(clean);
+        assert_eq!(triangles.len(), 2);
+        let mut sum = [0.0f64; 3];
+        for t in &triangles {
+            for (s, c) in sum.iter_mut().zip(newell(&t.map(|i| step[i]))) {
+                *s += c;
+            }
+        }
+        let whole = newell(&step);
+        assert!(
+            sum.iter().zip(whole).all(|(s, w)| (s - w).abs() < 1e-12),
+            "{sum:?} {whole:?}"
+        );
     }
 
     #[test]

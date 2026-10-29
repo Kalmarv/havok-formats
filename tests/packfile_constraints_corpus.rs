@@ -102,7 +102,7 @@ fn hinge(t: &mut Tally, h: &LimitedHinge) {
         (h.ball_socket.bodies_to_notify, h.ball_socket.stabilization_factor),
         (0, 0x30)
     );
-    assert_eq!(h.ball_socket.max_impulse, f32::MAX);
+    assert_eq!(bits(h.ball_socket.max_impulse), 0x7F7F_FFEE);
 }
 
 fn ragdoll(t: &mut Tally, r: &Ragdoll) {
@@ -168,7 +168,7 @@ fn ragdoll(t: &mut Tally, r: &Ragdoll) {
         (r.ball_socket.bodies_to_notify, r.ball_socket.stabilization_factor),
         (0, 0x30)
     );
-    assert_eq!(r.ball_socket.max_impulse, f32::MAX);
+    assert_eq!(bits(r.ball_socket.max_impulse), 0x7F7F_FFEE);
 }
 
 fn tally_all() -> Result<Option<Tally>, Box<dyn std::error::Error>> {

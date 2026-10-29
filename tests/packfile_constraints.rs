@@ -195,7 +195,7 @@ fn put_transforms(b: &mut Builder, at: usize) {
 fn put_ball_socket(b: &mut Builder, at: usize) {
     b.u16(at, 5);
     b.data[at + 3] = 0x30;
-    b.f32(at + 4, f32::MAX);
+    b.f32(at + 4, f32::from_bits(0x7F7F_FFEE));
 }
 
 fn put_ang_friction(b: &mut Builder, at: usize, num_axes: u8, torque: f32) {
@@ -422,7 +422,7 @@ fn a_limited_hinge_reads_with_its_atoms() {
     assert_eq!(h.free_rotation_axis, 0);
     assert_eq!(h.ball_socket.bodies_to_notify, 0);
     assert_eq!(h.ball_socket.stabilization_factor, 0x30);
-    assert_eq!(h.ball_socket.max_impulse, f32::MAX);
+    assert_eq!(h.ball_socket.max_impulse.to_bits(), 0x7F7F_FFEE);
 }
 
 #[test]
