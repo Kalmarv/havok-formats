@@ -30,12 +30,12 @@
 //! Sections are cut by the surface-area heuristic over the triangles' boxes ([`crate::bvtree_write`] has what the stock
 //! trees show of this) and the trees over their primitives and over the sections are [`sah_shape`]s.
 //!
+//! The interior flags of the shape (`triangleIsInterior`) are computed from the written triangles ([`crate::interior_keys`]
+//! has the rule, which reproduces the stock flags exactly).
+//!
 //! What is not reproduced: the stock builder's own splits above 16 leaves, the merging of triangle pairs into quads
-//! (about 17% of the stock keys are quad halves; every primitive written here is a triangle), the interior flags of the
-//! triangles (all zero here; none is set in 11% of Sekiro's meshes and 25% of Elden Ring's; a set one is on a triangle
-//! whose three edges all meet another triangle in 8,080,707 of 8,080,712 cases in Sekiro and 25,136,048 of 25,136,262 in
-//! Elden Ring, and of those triangles 41% and 44% have it set, with no feature of the triangles tried to predict which),
-//! custom and extern primitives, and the connectivity. A tree of another topology is read the same way.
+//! (about 17% of the stock keys are quad halves; every primitive written here is a triangle), custom and extern
+//! primitives, and the connectivity. A tree of another topology is read the same way.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -43,6 +43,7 @@
 )]
 use crate::bvtree::NodeWidth;
 use crate::bvtree_write::{Aabb, encode_tree, sah_shape, sah_split};
+use crate::interior::{MeshView, SectionView, interior_keys, primitives_of};
 use crate::schema::{Schema, put_f32s, put_uint};
 use crate::simd_write::{SimdEncoding, SimdLeaf, build_simd_tree, node_bytes};
 use crate::simdtree::SimdNode;
@@ -696,6 +697,34 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
 }
 
 impl BuiltMesh {
+    /// The shape keys whose interior flag is set: the pass of [`interior_keys`] over the mesh's triangles, with the
+    /// vertices named as they are stored (a shared vertex by its page and entry) and decoded from the codes.
+    pub fn interior_keys(&self) -> Result<Vec<u32>> {
+        let sections: Vec<SectionView> = self
+            .sections
+            .iter()
+            .map(|s| SectionView {
+                codec: s.codec,
+                first_packed_vertex: s.first_packed_vertex,
+                packed_vertices: s.packed_vertices,
+                first_shared_index: s.first_shared_index,
+                page: s.page,
+                first_primitive: s.first_primitive,
+                primitives: s.primitives,
+            })
+            .collect();
+        let view = MeshView {
+            domain: self.domain,
+            sections: &sections,
+            primitives: &self.primitives,
+            packed_vertices: &self.packed_vertices,
+            shared_vertices: &self.shared_vertices,
+            shared_index: &self.shared_vertex_index,
+            flat_mask: 0,
+        };
+        Ok(interior_keys(&primitives_of(&view, true)?))
+    }
+
     /// The simd tree's nodes in `encoding`.
     pub fn simd_tree(&self, encoding: SimdEncoding) -> Result<Vec<SimdNode>> {
         build_simd_tree(&self.simd_leaves, encoding)
@@ -884,7 +913,7 @@ fn element_of(schema: &Schema<'_>, class: usize, path: &[&str], bytes: usize) ->
 }
 
 /// Replace the mesh of the compressed mesh shape in item `shape_item` of `image` with `built`: the mesh tree, the simd tree
-/// and the shape's key bits, interior flags and (where the shape has one, as Sekiro's and Elden Ring's collision does)
+/// and the shape's key bits, interior flags ([`BuiltMesh::interior_keys`]) and (where the shape has one, as Sekiro's and Elden Ring's collision does)
 /// `triangleIndexToShapeKey`, rewritten with one entry per source triangle in the form the files store (the key left
 /// aligned in 32 bits and the rest ones; `0xFFFFFFFF` for a triangle left out). The connectivity, the extern shapes, and
 /// anything the shape holds of a game's own layer on top (Sekiro's `pParam`, a per-triangle table indexed by source
@@ -1070,6 +1099,17 @@ pub fn replace_compressed_mesh(image: &mut TagfileImage, shape_item: usize, buil
     }
     let word_count =
         usize::try_from(num_bits.div_ceil(32)).map_err(|_| invalid(0, "too many interior flag words"))?;
+    // the interior flags: one bit per shape key
+    let mut interior_words = vec![0u32; word_count];
+    for key in built.interior_keys()? {
+        if let Some(word) = usize::try_from(key.wrapping_shr(5))
+            .ok()
+            .and_then(|w| interior_words.get_mut(w))
+        {
+            *word |= 1u32.checked_shl(key & 31).unwrap_or(0);
+        }
+    }
+    let interior_bytes: Vec<u8> = interior_words.iter().flat_map(|w| w.to_le_bytes()).collect();
     let map_member = schema.field(shape_type, "triangleIndexToShapeKey").ok();
     let mut map_bytes = Vec::new();
     if let Some(m) = map_member {
@@ -1166,13 +1206,13 @@ pub fn replace_compressed_mesh(image: &mut TagfileImage, shape_item: usize, buil
             .ok_or_else(|| invalid(0, "section offset overflow"))?;
         image.set_reference(sections_item, at, node_item)?;
     }
-    // the interior flags (all zero) and the triangle map
+    // the interior flags and the triangle map
     image.set_array(
         shape_item,
         words_member.offset,
         words_type,
         word_count,
-        vec![0u8; word_count.saturating_mul(4)],
+        interior_bytes,
     )?;
     if let Some(m) = map_member {
         let element = schema.subtype_of(m.type_index)?;

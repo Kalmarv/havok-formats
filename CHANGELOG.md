@@ -80,6 +80,14 @@ rebuilt from its decoded triangles, written into its file's image and read back.
 - `encode_tree`, `balanced_shape`, `shape_of`, `Shape`, `EncodedTree` and `Aabb` (new): the static bounding-volume tree
   encoder behind them; `build_simd_tree`, `SimdLeaf`, `SimdEncoding` and `EMPTY_BOX`: the four-lane tree, numbered the
   way both games' files are.
+- `interior_keys`, `interior_primitives`, `primitives_of`, `InteriorPrimitive`, `MeshView`, `SectionView`, `rsqrt_estimate`
+  and `game_sort` (new), `BuiltMesh::interior_keys` (new), and the writers' `triangleIsInterior`: the flags are no longer
+  left zero but computed by the pass that sets them in the stock meshes (neighbours by reversed edges, convex edges,
+  an ordering by area and convex count with the stock quicksort, marking against flagged neighbours and a 70 degree
+  limit; a flat quad is one polygon). It reproduces every flag of the 2,982 Sekiro and 17,122 Elden Ring meshes that
+  have any (25,383,271 and 65,846,233 shape keys, none wrong). The reciprocal square root estimate inside it is a table
+  fitted from those flags, not a processor's. The meshes the stock tool made without the pass (362 and 5,777) have no
+  flags at all.
 - `NodeWidth::Six` (new variant): `BvTree::decode` reads the 6-byte nodes of an extern mesh's aabb tree.
 ## 0.8.1 (2026-10-28)
 

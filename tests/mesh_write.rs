@@ -337,7 +337,7 @@ fn a_built_mesh_written_into_either_layout_reads_back() {
                 tree.field("bitsPerKey").unwrap().unsigned().unwrap(),
                 u64::from(built.bits_per_key)
             );
-            // the interior flags: one bit per key, none set
+            // the interior flags: one bit per key, the ones the pass over the built triangles names
             let bits = shape
                 .field("triangleIsInterior")
                 .unwrap()
@@ -352,8 +352,16 @@ fn a_built_mesh_written_into_either_layout_reads_back() {
                 words.len() as u64,
                 (u64::from(built.max_key_value) + 1).div_ceil(32)
             );
+            let mut expected = vec![0u64; words.len()];
+            for key in built.interior_keys().unwrap() {
+                expected[(key / 32) as usize] |= 1 << (key % 32);
+            }
             for i in 0..words.len() {
-                assert_eq!(words.get(i).unwrap().unsigned().unwrap(), 0);
+                assert_eq!(
+                    words.get(i).unwrap().unsigned().unwrap(),
+                    expected[i],
+                    "{sdk:?} {class} word {i}"
+                );
             }
             // the map from source triangle to shape key (the games' own layer has it; the plain class has none)
             if class.starts_with("fsnp") {

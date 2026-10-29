@@ -1,4 +1,5 @@
 use crate::bvtree::{BoundsCheck, decode_trees};
+use crate::interior::{InteriorPrimitive, MeshView, SectionView, primitives_of};
 use crate::simdtree::{LivePrimitive, SimdCheck, check_against, simd_tree};
 use crate::{Result, Value, invalid};
 
@@ -664,6 +665,82 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
     }
     result.simd = check_against(&simd_tree(data)?, &mut live, data)?;
     Ok(result)
+}
+
+/// The triangles and quads of a compressed mesh as the pass that sets the interior flags reads them
+/// ([`interior_keys`](crate::interior_keys)): each primitive with the identity and the position of its four vertices, the
+/// identity being what the stock tool names a vertex by (a packed vertex by its section and slot, a shared vertex by its
+/// entry in the shared-vertex index, whatever page it is on) and the positions what the codes decode to in single
+/// precision (`code * scale + offset`). Custom and removed primitives have no keys and are left out. The tree must store
+/// its vertex arrays in the configuration [`compressed_mesh`] reads.
+pub fn interior_primitives(data: Value<'_, '_>) -> Result<Vec<InteriorPrimitive>> {
+    let tree = data.field("meshTree")?;
+    let domain = aabb(tree.field("domain")?)?;
+    let primitives = tree.field("primitives")?.array()?;
+    let packed = array_of_width(tree, "packedVertices", 4)?;
+    let shared = array_of_width(tree, "sharedVertices", 8)?;
+    let shared_indices = array_of_width(tree, "sharedVerticesIndex", 2)?;
+    let ranges = mesh_sections(data)?;
+    let at = tree.at();
+    let mut slots: Vec<[u8; 4]> = Vec::with_capacity(primitives.len());
+    for i in 0..primitives.len() {
+        let indices = primitives.get(i)?.field("indices")?.array()?;
+        if indices.len() != 4 {
+            return Err(invalid(at, "primitive must have four indices"));
+        }
+        let mut four = [0u8; 4];
+        for (j, slot) in four.iter_mut().enumerate() {
+            *slot = u8::try_from(index(indices.get(j)?, at)?)
+                .map_err(|_| invalid(at, "a primitive names a vertex slot past a byte"))?;
+        }
+        slots.push(four);
+    }
+    let mut packed_codes: Vec<u32> = Vec::with_capacity(packed.len());
+    for i in 0..packed.len() {
+        packed_codes.push(
+            u32::try_from(packed.get(i)?.unsigned()?)
+                .map_err(|_| invalid(at, "packed vertex exceeds u32"))?,
+        );
+    }
+    let mut shared_codes: Vec<u64> = Vec::with_capacity(shared.len());
+    for i in 0..shared.len() {
+        shared_codes.push(shared.get(i)?.unsigned()?);
+    }
+    let mut entries: Vec<u16> = Vec::with_capacity(shared_indices.len());
+    for i in 0..shared_indices.len() {
+        entries.push(
+            u16::try_from(shared_indices.get(i)?.unsigned()?)
+                .map_err(|_| invalid(at, "shared-vertex index entry exceeds 16 bits"))?,
+        );
+    }
+    let sections: Vec<SectionView> = ranges
+        .iter()
+        .map(|r| SectionView {
+            codec: r.codec,
+            first_packed_vertex: r.first_packed_vertex,
+            packed_vertices: r.packed_vertices,
+            first_shared_index: r.first_shared_vertex,
+            page: r.page,
+            first_primitive: r.first_primitive,
+            primitives: r.primitives,
+        })
+        .collect();
+    let flat_mask = tree
+        .field("primitiveStoresIsFlatConvex")
+        .ok()
+        .and_then(|v| v.unsigned().ok())
+        .and_then(|v| u8::try_from(v).ok())
+        .unwrap_or(0);
+    let view = MeshView {
+        domain,
+        sections: &sections,
+        primitives: &slots,
+        packed_vertices: &packed_codes,
+        shared_vertices: &shared_codes,
+        shared_index: &entries,
+        flat_mask,
+    };
+    primitives_of(&view, false)
 }
 
 #[cfg(test)]

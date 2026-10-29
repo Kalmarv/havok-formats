@@ -27,7 +27,8 @@
 //!   MOPP code that indexes their triangles ([`mopp`]). The convex point sets of custom mesh primitives are decoded
 //!   ([`PointSet`]).
 //! - Collision written from triangles: [`build_compressed_mesh`] makes the mesh tree arrays of an `hknp` compressed mesh
-//!   ([`BuiltMesh`]: sections, packed and shared vertices, section and mesh trees, the simd tree) and
+//!   ([`BuiltMesh`]: sections, packed and shared vertices, section and mesh trees, the simd tree, the interior
+//!   flags, [`interior_keys`]) and
 //!   [`replace_compressed_mesh`] puts them into the shape of a [`TagfileImage`]; [`replace_extern_mesh`] does the same
 //!   for an extern mesh. The layouts come from the file's own type table.
 //!
@@ -108,6 +109,7 @@ pub mod constraint;
 pub mod convex;
 mod extern_mesh;
 mod extern_write;
+mod interior;
 mod mesh;
 pub mod navmesh;
 
@@ -135,9 +137,12 @@ pub use bvtree_write::{
 };
 pub use extern_mesh::{ExternMesh, extern_mesh};
 pub use extern_write::{ExternSource, extern_mesh_shapes, replace_extern_mesh};
+pub use interior::{
+    InteriorPrimitive, MeshView, SectionView, game_sort, interior_keys, primitives_of, rsqrt_estimate,
+};
 pub use mesh::{
     CompressedMesh, CustomKind, CustomPrimitive, MeshSection, PointSet, ShapeInstance, Triangle,
-    compressed_mesh, extern_shapes, mesh_sections,
+    compressed_mesh, extern_shapes, interior_primitives, mesh_sections,
 };
 pub use mesh_write::{
     BuiltMesh, BuiltSection, MAX_PRIMITIVES, MAX_SLOTS, MeshSource, build_compressed_mesh,
