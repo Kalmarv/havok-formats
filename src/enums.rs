@@ -1,25 +1,26 @@
 //! Names for the values of the enumerated members the games' Havok files store as numbers.
 //!
 //! Each enumeration is a Rust enum with the value the files store ([`value`](hkp::MotionType::value)), the SDK's
-//! name for it ([`name`](hkp::MotionType::name)) and the way back ([`from_value`](hkp::MotionType::from_value), `None`
-//! for a value the enumeration does not name). Where the files hold only some of the named values the variant says
-//! which, with the counts of a census of every distinct tagfile of Sekiro (19,127 read; 11 more need a compendium that
-//! lies in another binder) and Elden Ring (68,722) and every one of the 490 packfiles of Tony Hawk's SHRED. A member that a type table marks
-//! as not serialisable (declaration flag [`DeclFlags::NOT_SERIALIZABLE`](crate::DeclFlags::NOT_SERIALIZABLE)) stores
-//! no value: its bytes are zero in every object of both installs, and the enumeration's zero is then no information.
+//! name for it ([`name`](hkp::MotionType::name)) and the way back ([`from_value`](hkp::MotionType::from_value),
+//! `None` for a value the enumeration does not name). Where the files hold only some of the named values the
+//! variant says which, with the counts of a census of every distinct tagfile of Sekiro (19,127 read; 10 more name a
+//! compendium that lies in another binder, and one archive entry is a truncated envelope) and Elden Ring (68,722)
+//! and every one of the 490 packfiles of Tony Hawk's SHRED. A member that a type table marks as not serialisable
+//! (declaration flag [`DeclFlags::NOT_SERIALIZABLE`](crate::DeclFlags::NOT_SERIALIZABLE)) stores no value: its bytes
+//! read zero every time they were read, so the enumeration's zero there is no information.
 //!
-//! The names come from the sources that allow it. The 7.1 `hkp` enumerations of the SHRED packfiles that carry their
-//! own class metadata ([`MotionType`](hkp::MotionType), [`ResponseType`](hkp::ResponseType),
+//! The names come from the sources that allow it. The 7.1 `hkp` enumerations of the SHRED packfiles that carry
+//! their own class metadata ([`MotionType`](hkp::MotionType), [`ResponseType`](hkp::ResponseType),
 //! [`BroadPhaseType`](hkp::BroadPhaseType)) are the metadata's own: the eight files list every item, and
-//! `tests/enums.rs` compares them with these variants. The others of `hkp` are the 6.6 SDK headers' (their numbering
-//! agrees with what the 7.1 files hold: no `hkp` enumeration of those headers is stored with other values). The
-//! 2014 and later tagfiles name the enumerations of their members but list no items (Sekiro: 160 of 160 type tables
-//! that describe `hkaAnimation`; Elden Ring: 660 of 660), so the `hka`, `hknp` and `hcl` names are those of HKLib's 2018.1
-//! classes (MIT), each one tested against the class that stores the value (`hknpShape`'s type against its class, for
-//! example).
+//! `tests/enums.rs` compares them with these variants. The others of `hkp` are the 6.6 SDK headers' (the values
+//! the 7.1 files store for them, 3 for the index striding type for example, are the headers' numbers). The 2014 and
+//! later tagfiles name the enumerations of their members but list no items (Sekiro: 160 of 160 type tables that
+//! describe `hkaAnimation`; Elden Ring: 660 of 660), so the `hka`, `hknp` and `hcl` names are those of HKLib's
+//! 2018.1 classes (MIT), each one tested against the class that stores the value (`hknpShape`'s type against its
+//! class, for example).
 //!
-//! A value that no file stores is still named when its source names it; the variant's documentation says it occurs in
-//! no file.
+//! A value that no file stores is still named when its source names it; the variant's documentation says it occurs
+//! in no file.
 
 macro_rules! named_enum {
     (
