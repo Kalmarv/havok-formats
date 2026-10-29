@@ -14,11 +14,17 @@
 //! null, the axes are fixed per slot (`twistAxis` 0, `refAxis` 1, the cone's `refAxisInB` 0 and the planes limit's 1, a
 //! hinge's `limitAxis` 0 and `cosineAxis` 1) and `velocityStabilizationFactor` is 48. Beyond that the values are the
 //! file's: the angles are radians, an axis is the index of a column of the frame.
+//!
+//! The same classes in the Havok 7.1.0-r1 packfiles of Tony Hawk's SHRED (the ragdolls' hinge and cone joints, and the
+//! breakable hinges of a level) have other members and other atom numbers; [`packfile`] reads those, together with the
+//! physics data, the systems and the constraint instances that lead to them.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
+pub mod packfile;
+
 use crate::{Result, Value, invalid};
 
 /// A rigid transform: the three columns of the rotation and the translation. Each stored column has a fourth lane

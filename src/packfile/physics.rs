@@ -74,8 +74,8 @@
 //! Every array header has the capacity word `size | 0x80000000` (an empty array has no fixup) and every pointer slot
 //! holds zero whether or not it has a fixup; see [`Packfile::array_header`] and [`Packfile::pointer`].
 //!
-//! The constraint classes and the container/system classes are recognised by name and counted by [`census`], not
-//! decoded.
+//! The constraint classes, the physics data and the systems that hold the bodies are read by
+//! [`crate::constraint::packfile`]. A body's collision filter word splits as [`FilterInfo`] says.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -87,7 +87,7 @@ use super::Packfile;
 use crate::Result;
 
 /// Classes decoded by this module.
-pub const DECODED: [&str; 13] = [
+pub const DECODED: [&str; 20] = [
     "hkpRigidBody",
     "hkpMoppBvTreeShape",
     "hkpMoppCode",
@@ -101,9 +101,6 @@ pub const DECODED: [&str; 13] = [
     "hkpCylinderShape",
     "hkpListShape",
     "hkpConvexTranslateShape",
-];
-/// Classes recognised by name and reported, not decoded.
-pub const RECOGNISED: [&str; 7] = [
     "hkpConstraintInstance",
     "hkpRagdollConstraintData",
     "hkpLimitedHingeConstraintData",
@@ -112,6 +109,9 @@ pub const RECOGNISED: [&str; 7] = [
     "hkpPhysicsData",
     "hkpPhysicsSystem",
 ];
+/// Classes recognised by name and reported, not decoded: none is left in the corpus (every class of the 490 files has
+/// a view).
+pub const RECOGNISED: [&str; 0] = [];
 
 /// What the objects of a packfile are: counts per class, split by what this module does with them.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -182,6 +182,45 @@ pub fn shape_user_data(pack: &Packfile<'_>, offset: usize) -> Result<u32> {
         return Err(pack.err(pack.at(offset, 0x0C)?, "the shape type word is not zero"));
     }
     pack.u32(pack.at(offset, 0x08)?)
+}
+
+/// A collision filter word split the way Havok's group filter (`hkpGroupFilter`) reads it: the layer in the low five
+/// bits, a sub-system id and the sub-system it does not collide with in the next two groups of five, a system group in
+/// the high sixteen. Bit 15 is not part of the split.
+///
+/// The files hold no filter object (the physics data's world is null in all 490 files, so there is no layer table
+/// either): what a layer number means, and which layers collide, is not in the data. What the data shows is which
+/// words occur. The `collisionFilterInfo` of the 12,789 rigid bodies has the values 0 (148 bodies), 2 (1,933), 7
+/// (8,741), 11 (1,953), 15 (1) and 18 (13), so the layer is all that is set: every body has sub-system id 0, no
+/// sub-system to ignore and system group 0. The per-triangle `filterInfo` of an extended mesh's materials is **not** such
+/// a word (its surface id sits in bits 3 to 8, across the layer and sub-system fields), and neither is the child
+/// record word of a list shape (0 in all 41).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FilterInfo(pub u32);
+
+impl FilterInfo {
+    /// The bits of the layer.
+    pub const LAYER_MASK: u32 = 0x1F;
+    /// The layer (bits 0 to 4).
+    pub fn layer(self) -> u8 {
+        u8::try_from(self.0 & Self::LAYER_MASK).unwrap_or_default()
+    }
+    /// The sub-system id (bits 5 to 9).
+    pub fn sub_system_id(self) -> u8 {
+        u8::try_from((self.0 >> 5) & 0x1F).unwrap_or_default()
+    }
+    /// The sub-system id this word does not collide with (bits 10 to 14).
+    pub fn sub_system_dont_collide_with(self) -> u8 {
+        u8::try_from((self.0 >> 10) & 0x1F).unwrap_or_default()
+    }
+    /// The system group (bits 16 to 31).
+    pub fn system_group(self) -> u16 {
+        u16::try_from(self.0 >> 16).unwrap_or_default()
+    }
+    /// The word as stored.
+    pub fn word(self) -> u32 {
+        self.0
+    }
 }
 
 /// An `hkpRigidBody`: where it is, what it is named and the shape it carries.
@@ -323,6 +362,11 @@ impl RigidBody {
             center_of_mass_local: pack.floats::<3>(at(0x170)?)?,
             gravity_factor: half(pack, at(0x1FE)?)?,
         })
+    }
+
+    /// The body's collision filter word, split (see [`FilterInfo`]).
+    pub fn filter(&self) -> FilterInfo {
+        FilterInfo(self.collision_filter_info)
     }
 
     /// A shape-local point in world space.

@@ -61,6 +61,18 @@ rebuilt from its decoded triangles, written into its file's image and read back.
 - `constraint` (new): `read_constraint_data` reads the data of an `hknpConstraintCinfo` into `ConstraintData` (ragdoll,
   limited hinge, hinge, ball and socket, fixed, wheel and the breakable wrapper) with each atom typed and its `type`
   word checked. The 2,499 Sekiro and 7,934 Elden Ring objects read.
+- `constraint::packfile` (new): the constraint side of SHRED's Havok 7.1.0-r1 packfiles. `PhysicsData::from_root`
+  (the root container's one `hkpPhysicsData` variant) leads to `PhysicsSystem` (bodies, constraints, name, `active`) and
+  its `ConstraintInstance`s (the two bodies, priority, name), whose `constraint` reads `ConstraintData`: `Ragdoll`,
+  `LimitedHinge` and `Breakable` (around a hinge), each atom typed (`TwistLimit`, `ConeLimit`, `AngLimit`, `AngMotor`,
+  `RagdollMotors`, `BallSocket`, and `Transform`, `LocalTransforms`, `AngFriction` shared with the tagfile atoms) and
+  its `type` word checked against the file's own `AtomType` numbering (`atom_type`). All 490 files, 972 systems, 161
+  instances (72 ragdoll, 89 limited hinge, 16 of them wrapped by a breakable constraint) read, none refused; every
+  offset the ragdoll files' class metadata covers equals it (a unit test).
+- `packfile::physics::FilterInfo` and `RigidBody::filter`: the collision filter word split into layer, sub-system id,
+  sub-system to ignore and system group. The 12,789 bodies set the layer alone (0, 2, 7, 11, 15 or 18); no file holds a
+  world or a filter object. `physics::DECODED` lists the classes `constraint::packfile` now reads (they were
+  `RECOGNISED`, which is empty).
 - `build_compressed_mesh`, `BuiltMesh`, `BuiltSection`, `MeshSource`, `compressed_mesh_shapes` and
   `replace_compressed_mesh` (new): triangles to the arrays of a compressed mesh tree, written into a `TagfileImage`
   by the file's own type table (either SDK layout, either simd encoding, the shape's key bits, interior flags and

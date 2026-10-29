@@ -196,7 +196,7 @@ fn rigid_body_and_box() {
     let c = physics::census(&p);
     assert_eq!(c.decoded.get("hkpRigidBody"), Some(&1));
     assert_eq!(c.decoded.get("hkpBoxShape"), Some(&1));
-    assert_eq!(c.recognised.get("hkRootLevelContainer"), Some(&1));
+    assert_eq!(c.decoded.get("hkRootLevelContainer"), Some(&1));
     assert!(c.unknown.is_empty());
     assert_eq!(physics::rigid_bodies(&p), vec![0x40]);
     let body = RigidBody::read(&p, 0x40).unwrap();
