@@ -130,6 +130,7 @@ mod spline_data;
 mod spline_encode;
 mod spline_fit;
 mod spline_sample;
+mod stock_tree;
 
 pub use bvtree::{
     BOUNDS_TOLERANCE_ULPS, BoundsCheck, BvNode, BvNodeKind, BvTree, MeshTrees, NodeWidth, SectionTree,
@@ -149,11 +150,12 @@ pub use mesh::{
     compressed_mesh, extern_shapes, interior_primitives, mesh_sections,
 };
 pub use mesh_write::{
-    BuiltMesh, BuiltSection, MAX_PRIMITIVES, MAX_SLOTS, MeshSource, Primitives, build_compressed_mesh,
-    build_compressed_mesh_with, compressed_mesh_shapes, replace_compressed_mesh,
+    BuildOptions, BuiltMesh, BuiltSection, Layout, MAX_PRIMITIVES, MAX_SLOTS, MeshSource, Primitives,
+    build_compressed_mesh, build_compressed_mesh_with, compressed_mesh_shapes, replace_compressed_mesh,
 };
 pub use quads::{QuadCandidate, pair_quads};
 pub use simd_write::{EMPTY_BOX, SimdEncoding, SimdLeaf, build_simd_tree};
+pub use stock_tree::{Box3, StockTree};
 mod tagfile;
 mod tagfile_write;
 mod types;

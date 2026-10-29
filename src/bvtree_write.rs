@@ -26,16 +26,19 @@
 //!   A subtree of 16 leaves is that in 67.5% (Sekiro) and 66.2% (Elden Ring), one of 17 leaves in 8.9% and 8.6%: above
 //!   16 the tree is not built that way.
 //! - The nodes above 16 leaves split within a few percent of the best surface-area split along an axis of the centres
-//!   (in one Sekiro map, half of the 7,597 top-level splits cost 2% or less over it), without being it: it is the stock
-//!   split in 329 of the 7,940 of the first 40 meshes, and the splits of 8 to 64 bins over the centres or the boxes,
-//!   with two costs, are the stock split in 0.5% to 7% of the 2,851 of the first 25. That rule is not reproduced.
+//!   (in one Sekiro map, half of the 7,597 top-level splits cost 2% or less over it), without being it. What the stock
+//!   split is, and how far this crate follows it, is in [`crate::StockTree`]. The splits of 8 to 64 bins over the centres
+//!   or the boxes, with two costs, were the stock split in 0.5% to 7% of the first 25 meshes' splits; the rule that
+//!   [`StockTree`](crate::StockTree) follows (32 bins by the place of the centre in the list's box, rounded; the first
+//!   best bin of three axes by the summed surfaces from both ends; the bin itself sorted by its centres) differs from
+//!   them in the bin placement and the cost, and in the order the leaves reach it (that of an insertion tree).
 //! - A node's first child is the one with the larger box: 20,184,136 against 417,276 nodes of Sekiro (913,005 have
 //!   children of one surface, 834,964 of them two leaves; of the others that differ in their leaves, 37,033 have the
 //!   child with more leaves first and 7,311 the one with fewer), 53,597,280 against 1,699,537 of Elden Ring.
 //!
 //! [`sah_shape`] follows that: it splits by the surface-area heuristic down to 16 leaves, merges those from the
-//! bottom, and puts the larger child first. It does not reproduce the stock trees, but they cost more to walk, by the
-//! total surface area of the inner nodes: 0.924 of the stock's in Sekiro and 0.915 in Elden Ring (the median split of
+//! bottom, and puts the larger child first. It does not reproduce the stock trees ([`crate::StockTree`] is the closer
+//! rule), but they cost more to walk, by the total surface area of the inner nodes: 0.924 of the stock's in Sekiro and 0.915 in Elden Ring (the median split of
 //! [`balanced_shape`], which this crate wrote before, makes 1.34 and 1.32).
 #![deny(
     clippy::arithmetic_side_effects,

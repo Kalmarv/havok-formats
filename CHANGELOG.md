@@ -96,6 +96,16 @@ rebuilt from its decoded triangles, written into its file's image and read back.
   are stock quads; for the stock pairs it makes it puts the stock first half first every time. The Sekiro object meshes
   come out lowest (86.0%). `Primitives::PairedQuads` makes the writers join the pairs into quad primitives (default
   `Triangles`: `build_compressed_mesh` is unchanged); `game_sort` is now `game_sort_by` on pairs.
+- `StockTree`, `Box3`, `BuildOptions` and `Layout` (new): the tree the stock tool builds over a mesh's primitives and cuts
+  into sections, read off the stock meshes. Leaves are inserted one by one into a box tree by a descent rule, listed left to
+  right, rebuilt top down (32 bins per axis by the place of the centre, best of three axes by the summed surfaces from both
+  ends, the bin itself sorted by its centres; bottom-up joins of 16 leaves or fewer by least union surface), refined by
+  grandchild swaps, the larger child put first, and cut in a queue where a section is a subtree of 127 leaves or fewer
+  with at most 255 distinct vertices. For the meshes of two sections or more it gives exactly the stock sections in their
+  stock order for 592 of 2,613 Sekiro and 4,577 of 14,218 Elden Ring meshes (with the stock mesh tree above them in all of
+  those), and 77% and 62% of the stock sections of all of them as sections; the files keep the vertices after
+  quantising them, where the stock tool worked from the ones before. `Layout::Stock` makes the writers use it
+  (default `Layout::Sah`: unchanged).
 - `NodeWidth::Six` (new variant): `BvTree::decode` reads the 6-byte nodes of an extern mesh's aabb tree.
 ## 0.8.1 (2026-10-28)
 

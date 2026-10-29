@@ -11,9 +11,9 @@
 mod tagbuilder;
 
 use havok_formats::{
-    BvTree, ExternSource, MeshSource, NodeWidth, Tagfile, build_compressed_mesh, compressed_mesh,
-    compressed_mesh_shapes, extern_mesh, extern_mesh_shapes, mesh_trees, replace_compressed_mesh,
-    replace_extern_mesh, simd_tree,
+    BuildOptions, BuiltMesh, BvTree, ExternSource, MeshSource, NodeWidth, Primitives, Tagfile,
+    build_compressed_mesh, build_compressed_mesh_with, compressed_mesh, compressed_mesh_shapes, extern_mesh,
+    extern_mesh_shapes, mesh_trees, replace_compressed_mesh, replace_extern_mesh, simd_tree,
 };
 use tagbuilder::{Built, Definition, Layout, fixed, primitive, record, tagfile};
 
@@ -375,6 +375,119 @@ fn a_built_mesh_written_into_either_layout_reads_back() {
                 }
             }
         }
+    }
+}
+
+/// A bumpy grid like [`grid`], its cells' triangles listed as `a b c` and `a c d` so that each cell's diagonal is a third
+/// edge and a first edge: the pairing joins each cell into a quad.
+fn grid_quads(n: usize, cell: f32) -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
+    let (vertices, _) = grid(n, cell);
+    let at = |i: usize, j: usize| (j * (n + 1) + i) as u32;
+    let mut triangles = Vec::new();
+    for j in 0..n {
+        for i in 0..n {
+            triangles.push([at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
+            triangles.push([at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+        }
+    }
+    (vertices, triangles)
+}
+
+/// Write `built` into a mesh shape of each SDK layout and read it back: the reader decodes what the builder says its
+/// arrays decode to, the trees hold every primitive's vertices, and the simd tree names every primitive exactly.
+fn written_reads_back(built: &BuiltMesh, triangles: usize) {
+    let want: std::collections::BTreeMap<u32, _> = built
+        .triangles()
+        .unwrap()
+        .iter()
+        .map(|t| (t.key, t.vertices))
+        .collect();
+    assert_eq!(want.len(), triangles);
+    for sdk in [SEKIRO, ELDEN_RING] {
+        let class = "fsnpCustomParamCompressedMeshShape";
+        let bytes = empty_shape(sdk, class).unwrap();
+        let tag = Tagfile::read(&bytes, None).unwrap();
+        let mut image = tag.image().unwrap();
+        let shapes = compressed_mesh_shapes(&image);
+        replace_compressed_mesh(&mut image, shapes[0], built).unwrap();
+        let written = image.write().unwrap();
+        let tag = Tagfile::read(&written, None).unwrap();
+        let shape = tag.root().unwrap();
+        let data = shape.field("data").unwrap().dereference().unwrap();
+        let mesh = compressed_mesh(data).unwrap();
+        assert_eq!(mesh.triangles.len(), triangles, "{sdk:?}");
+        assert!(mesh.custom.is_empty() && mesh.dead_primitives == 0);
+        for t in &mesh.triangles {
+            assert_eq!(want[&t.key], t.vertices, "{sdk:?} key {}", t.key);
+        }
+        assert_eq!(mesh.bounds.outside, 0, "{sdk:?}");
+        assert_eq!(mesh.bounds.primitives, built.primitives.len());
+        let trees = mesh_trees(data).unwrap();
+        assert_eq!(trees.sections.len(), built.sections.len());
+        assert_eq!(mesh.simd.leaves, built.primitives.len(), "{sdk:?}");
+        assert_eq!(mesh.simd.leaves_exact, built.primitives.len());
+        assert_eq!((mesh.simd.leaves_outside, mesh.simd.leaves_looser), (0, 0));
+        assert_eq!((mesh.simd.children_looser, mesh.simd.children_short), (0, 0));
+    }
+}
+
+#[test]
+fn a_mesh_laid_out_as_the_stock_tool_does_reads_back() {
+    let (vertices, triangles) = grid(30, 1.0);
+    let options = BuildOptions {
+        primitives: Primitives::Triangles,
+        layout: havok_formats::Layout::Stock,
+    };
+    let built = build_compressed_mesh_with(
+        &MeshSource {
+            vertices: &vertices,
+            triangles: &triangles,
+            convex_radius: 0.01,
+        },
+        &options,
+    )
+    .unwrap();
+    assert_eq!(built.triangle_keys.iter().flatten().count(), triangles.len());
+    assert!(built.sections.len() >= 15, "{} sections", built.sections.len());
+    assert!(
+        built
+            .sections
+            .iter()
+            .all(|s| s.primitives <= 127 && s.packed_vertices + s.shared_indices <= 255)
+    );
+    assert_eq!(built.num_primitive_keys as usize, triangles.len());
+    written_reads_back(&built, triangles.len());
+}
+
+#[test]
+fn triangle_pairs_are_joined_into_quads_and_read_back() {
+    let n = 30;
+    let (vertices, triangles) = grid_quads(n, 1.0);
+    for layout in [havok_formats::Layout::Sah, havok_formats::Layout::Stock] {
+        let options = BuildOptions {
+            primitives: Primitives::PairedQuads,
+            layout,
+        };
+        let built = build_compressed_mesh_with(
+            &MeshSource {
+                vertices: &vertices,
+                triangles: &triangles,
+                convex_radius: 0.01,
+            },
+            &options,
+        )
+        .unwrap();
+        // every cell is one quad: four distinct slots, the first half at an even key and the second at the next
+        assert_eq!(built.primitives.len(), n * n, "{layout:?}");
+        assert!(built.primitives.iter().all(|p| p[2] != p[3]));
+        assert_eq!(built.num_primitive_keys as usize, n * n);
+        assert_eq!(built.triangle_keys.iter().flatten().count(), triangles.len());
+        for pair in built.triangle_keys.chunks(2) {
+            let (first, second) = (pair[0].unwrap(), pair[1].unwrap());
+            assert_eq!((first & 1, second), (0, first | 1), "{layout:?}");
+        }
+        assert_eq!(built.max_key_value & 1, 1);
+        written_reads_back(&built, triangles.len());
     }
 }
 

@@ -27,8 +27,10 @@
 //!   stored once).
 //! - The simd tree's leaf boxes are exactly the primitives' vertex boxes; its lane boxes exactly the unions below.
 //!
-//! Sections are cut by the surface-area heuristic over the triangles' boxes ([`crate::bvtree_write`] has what the stock
-//! trees show of this) and the trees over their primitives and over the sections are [`sah_shape`]s.
+//! By default sections are cut by the surface-area heuristic over the primitives' boxes ([`crate::bvtree_write`] has what the
+//! stock trees show of this) and the trees over their primitives and over the sections are [`sah_shape`]s.
+//! [`Layout::Stock`] instead builds one [`StockTree`] over all the primitives and cuts it the way the stock tool does: a
+//! section's tree is its piece of it and the mesh tree the part above the sections.
 //!
 //! The interior flags of the shape (`triangleIsInterior`) are computed from the written triangles ([`crate::interior_keys`]
 //! has the rule, which reproduces the stock flags exactly).
@@ -38,20 +40,21 @@
 //! in Elden Ring) become quad primitives `[a, b, c, d]`, the first half `a b c` at the primitive's key and the second half
 //! `a c d` at the key with the half bit set; the quads are never flat (`primitiveStoresIsFlatConvex` stays 0).
 //!
-//! What is not reproduced: the stock builder's own splits above 16 leaves, custom and extern primitives, and the
-//! connectivity. A tree of another topology is read the same way.
+//! What is not reproduced: the exact stock trees (the stock tool built them from vertices before they were quantised,
+//! see [`StockTree`]), the stock numbering of a section's primitives, custom and extern primitives, and the connectivity. A tree of another topology is read the same way.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
 use crate::bvtree::NodeWidth;
-use crate::bvtree_write::{Aabb, encode_tree, sah_shape, sah_split};
+use crate::bvtree_write::{Aabb, Shape, encode_tree, sah_shape, sah_split};
 use crate::interior::{MeshView, SectionView, interior_keys, primitives_of};
 use crate::quads::{QuadCandidate, pair_quads};
 use crate::schema::{Schema, put_f32s, put_uint};
 use crate::simd_write::{SimdEncoding, SimdLeaf, build_simd_tree, node_bytes};
 use crate::simdtree::SimdNode;
+use crate::stock_tree::{Box3, StockTree};
 use crate::{ImageItem, ItemKind, Result, TagfileImage, Triangle, invalid};
 use primase_foundations::vertex::{packed_position32, packed_position64};
 
@@ -305,6 +308,26 @@ fn join_quads(kept: &[Kept], vertices: &[[f32; 3]]) -> Result<Vec<Kept>> {
     Ok(out)
 }
 
+/// The boxes of the primitives for a [`StockTree`]: their source vertices' box grown by `radius`, in single precision.
+fn primitive_boxes(kept: &[Kept], vertices: &[[f32; 3]], radius: f32) -> Result<Vec<Box3>> {
+    let mut boxes = Vec::with_capacity(kept.len());
+    for k in kept {
+        let mut low = [f32::MAX; 3];
+        let mut high = [f32::MIN; 3];
+        for &v in k.used() {
+            let p = vertex(vertices, v)?;
+            for (axis, &x) in p.iter().enumerate() {
+                if let (Some(l), Some(h)) = (low.get_mut(axis), high.get_mut(axis)) {
+                    *l = l.min(x);
+                    *h = h.max(x);
+                }
+            }
+        }
+        boxes.push([low.map(|x| x - radius), high.map(|x| x + radius)]);
+    }
+    Ok(boxes)
+}
+
 /// How many distinct vertices the triangles `group` use, up to `limit + 1`; `stamp` and `mark` keep the count O(group).
 fn distinct_vertices(
     kept: &[Kept],
@@ -443,7 +466,7 @@ fn pack64(p: [f32; 3], min: [f32; 3], max: [f32; 3]) -> u64 {
 /// Refused: no triangle left; a vertex that is not finite; an index past the vertices; a convex radius that is negative or
 /// not finite; more sections or shared vertices than the file's fields number.
 pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
-    build_compressed_mesh_with(source, Primitives::Triangles)
+    build_compressed_mesh_with(source, &BuildOptions::default())
 }
 
 /// What the primitives of a built mesh are.
@@ -457,8 +480,38 @@ pub enum Primitives {
     PairedQuads,
 }
 
-/// [`build_compressed_mesh`] with the choice of [`Primitives`].
-pub fn build_compressed_mesh_with(source: &MeshSource<'_>, primitives_kind: Primitives) -> Result<BuiltMesh> {
+/// How the sections and their trees are laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    /// Sections are cut by the surface-area heuristic over the primitives' boxes, and each tree is built by
+    /// [`sah_shape`] over its own leaves.
+    Sah,
+    /// One [`StockTree`] is built over all the primitives and cut into sections ([`StockTree::cut`]); a section's tree is
+    /// its piece of it, and the mesh tree the part above the sections. The sections are numbered in queue order, and
+    /// a section's primitives in the order of its tree.
+    Stock,
+}
+
+/// The choices of [`build_compressed_mesh_with`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildOptions {
+    /// Triangles, or pairs of them joined into quads.
+    pub primitives: Primitives,
+    /// How sections and trees are laid out.
+    pub layout: Layout,
+}
+
+impl Default for BuildOptions {
+    fn default() -> Self {
+        Self {
+            primitives: Primitives::Triangles,
+            layout: Layout::Sah,
+        }
+    }
+}
+
+/// [`build_compressed_mesh`] with the choices of [`BuildOptions`].
+pub fn build_compressed_mesh_with(source: &MeshSource<'_>, options: &BuildOptions) -> Result<BuiltMesh> {
     let verts = source.vertices;
     let radius = source.convex_radius;
     if !radius.is_finite() || radius < 0.0 {
@@ -485,26 +538,54 @@ pub fn build_compressed_mesh_with(source: &MeshSource<'_>, primitives_kind: Prim
     if kept.is_empty() {
         return Err(invalid(0, "no triangle to build a mesh from"));
     }
-    if primitives_kind == Primitives::PairedQuads {
+    if options.primitives == Primitives::PairedQuads {
         kept = join_quads(&kept, verts)?;
     }
     let mut triangle_keys: Vec<Option<u32>> = vec![None; source.triangles.len()];
 
     // sections, in the order of a tree over their (unquantised) boxes, so that a section's number is its leaf's payload
-    let groups = partition(&kept, verts, r)?;
-    let rough: Vec<Aabb> = groups
-        .iter()
-        .map(|g| {
-            let points: Vec<[f32; 3]> = g
+    let mut stock_shapes: Option<Vec<(Vec<Shape>, Vec<usize>)>> = None;
+    let (groups, mesh_shape, section_order) = match options.layout {
+        Layout::Sah => {
+            let groups = partition(&kept, verts, r)?;
+            let rough: Vec<Aabb> = groups
                 .iter()
-                .filter_map(|&t| kept.get(t))
-                .flat_map(|k| k.used().iter().copied())
-                .filter_map(|v| vertex(verts, v).ok())
+                .map(|g| {
+                    let points: Vec<[f32; 3]> = g
+                        .iter()
+                        .filter_map(|&t| kept.get(t))
+                        .flat_map(|k| k.used().iter().copied())
+                        .filter_map(|v| vertex(verts, v).ok())
+                        .collect();
+                    grown_box(&points, r)
+                })
                 .collect();
-            grown_box(&points, r)
-        })
-        .collect();
-    let (mesh_shape, section_order) = sah_shape(&rough)?;
+            let (mesh_shape, section_order) = sah_shape(&rough)?;
+            (groups, mesh_shape, section_order)
+        }
+        Layout::Stock => {
+            let boxes = primitive_boxes(&kept, verts, radius)?;
+            let tree = StockTree::build(&boxes);
+            let items = tree.cut(MAX_PRIMITIVES, &|leaves: &[usize]| {
+                let mut ids: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+                for &t in leaves {
+                    if let Some(k) = kept.get(t) {
+                        ids.extend(k.used().iter().copied());
+                    }
+                }
+                ids.len() <= MAX_SLOTS
+            });
+            let groups: Vec<Vec<usize>> = items.iter().map(|&n| tree.leaves_under(n)).collect();
+            let shapes: Vec<(Vec<Shape>, Vec<usize>)> = items
+                .iter()
+                .zip(&groups)
+                .map(|(&n, g)| (tree.shape_under(n).0, (0..g.len()).collect()))
+                .collect();
+            stock_shapes = Some(shapes);
+            let section_order: Vec<usize> = (0..groups.len()).collect();
+            (groups, tree.shape_above(&items), section_order)
+        }
+    };
     let sections_tris: Vec<&Vec<usize>> = section_order.iter().filter_map(|&g| groups.get(g)).collect();
     let section_count = sections_tris.len();
     if section_count > 0x00ff_ffff {
@@ -678,7 +759,10 @@ pub fn build_compressed_mesh_with(source: &MeshSource<'_>, primitives_kind: Prim
             leaf_boxes.push(grown_box(&points, r));
             tri_slots.push(slots);
         }
-        let (shape, order) = sah_shape(&leaf_boxes)?;
+        let (shape, order) = match stock_shapes.as_ref().and_then(|v| v.get(s)) {
+            Some((shape, order)) => (shape.clone(), order.clone()),
+            None => sah_shape(&leaf_boxes)?,
+        };
         let section_domain = outward(&grown_box(&positions, r));
         let tree = encode_tree(NodeWidth::Four, section_domain, &shape, &|payload| {
             order
@@ -1458,7 +1542,14 @@ mod tests {
         };
         let plain = build_compressed_mesh(&source).unwrap();
         assert_eq!(plain.primitives.len(), 2);
-        let built = build_compressed_mesh_with(&source, Primitives::PairedQuads).unwrap();
+        let built = build_compressed_mesh_with(
+            &source,
+            &BuildOptions {
+                primitives: Primitives::PairedQuads,
+                layout: Layout::Sah,
+            },
+        )
+        .unwrap();
         // slots by first use: vertex 0, 1, 3, then 2
         assert_eq!(built.primitives, [[0, 1, 2, 3]]);
         assert_eq!(built.sections[0].primitives, 1);
