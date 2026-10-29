@@ -422,6 +422,11 @@ fn cross_squared(p: [f32; 3], q: [f32; 3], r: [f32; 3]) -> f32 {
 /// the 8,760 triangles the codes have no terminal for from the 637,213 they have one for (none of those is under the
 /// threshold). The other five, in three meshes, are thin triangles with a squared cross product of 6e-7 to 0.03 that the
 /// rule keeps: some other test of the builder leaves them out, and 21,986 triangles under 1e-6 keep their terminals.
+/// No threshold on the squared cross product, on it over the longest edge or the two longest edges, on the shortest edge,
+/// on the perimeter or on the cross product of the vertices quantised to the code's grid separates the five from the
+/// triangles with a terminal, and in one mesh a mirror pair of slivers (squared cross product 0.00428 and 0.00429, edges
+/// 14.29, 14.30 and 0.013 against 14.27, 14.29 and 0.013) has one left out and one kept; none of the five has a
+/// duplicate, a repeated vertex index, or a scaled mesh to explain it (the three meshes' scaling is 1).
 pub fn is_degenerate(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> bool {
     cross_squared(a, b, c) < DEGENERATE_CROSS_SQUARED || cross_squared(b, a, c) < DEGENERATE_CROSS_SQUARED
 }

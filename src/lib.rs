@@ -130,7 +130,9 @@ pub use bvtree::{
     BOUNDS_TOLERANCE_ULPS, BoundsCheck, BvNode, BvNodeKind, BvTree, MeshTrees, NodeWidth, SectionTree,
     mesh_trees,
 };
-pub use bvtree_write::{Aabb, EncodedTree, Shape, balanced_shape, encode_tree, shape_of};
+pub use bvtree_write::{
+    Aabb, EncodedTree, MERGE_LEAVES, Shape, balanced_shape, encode_tree, sah_shape, sah_shape_with, shape_of,
+};
 pub use extern_mesh::{ExternMesh, extern_mesh};
 pub use extern_write::{ExternSource, extern_mesh_shapes, replace_extern_mesh};
 pub use mesh::{

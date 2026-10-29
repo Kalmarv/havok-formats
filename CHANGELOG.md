@@ -66,6 +66,17 @@ rebuilt from its decoded triangles, written into its file's image and read back.
   by the file's own type table (either SDK layout, either simd encoding, the shape's key bits, interior flags and
   `triangleIndexToShapeKey`). `replace_extern_mesh`, `extern_mesh_shapes` and `ExternSource` do the same for
   `hknpExternMeshShape` in the form its class stores (the 6-byte aabb tree of class 2, the four-lane simd tree of class 3).
+- `sah_shape`, `sah_shape_with` and `MERGE_LEAVES` (new): the tree topology the writers use, from the census of the
+  stock trees. A node of more than 16 leaves is split by the surface-area heuristic over the three axes, a node of 16
+  or fewer has its leaves merged from the bottom (always the two nodes whose union has the least surface area), the
+  larger child first. Of the 2,043,084 maximal subtrees of 3 to 16 leaves of Sekiro's section trees 78% are what this
+  merge gives (Elden Ring: 75% of 5,454,605), a subtree of 16 leaves 67% and one of 17 leaves 9%; the trees cost 0.92 of
+  the stock trees' total inner surface (the median split of `balanced_shape`, now unused by the writers, 1.3). Sections
+  are cut by the same split (a stock section is a subtree cut at 127 primitives: 99,158 of 99,164 pairs of sibling
+  sections in Sekiro hold more together). Byte equality of the stock trees is not reached: their splits above 16 leaves
+  are not any rule tried, and the nibbles of the stock nodes were chosen from vertices before quantisation.
+- Fixed in the writers: four expressions that borrowed two elements of one array mutably at once (`union`, `axes_for`,
+  the extern domain, `union_box`) now borrow them one after the other.
 - `encode_tree`, `balanced_shape`, `shape_of`, `Shape`, `EncodedTree` and `Aabb` (new): the static bounding-volume tree
   encoder behind them; `build_simd_tree`, `SimdLeaf`, `SimdEncoding` and `EMPTY_BOX`: the four-lane tree, numbered the
   way both games' files are.

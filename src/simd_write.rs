@@ -79,13 +79,10 @@ struct Draft {
 fn union_box(a: &LaneBox, b: &LaneBox) -> LaneBox {
     let mut out = *a;
     for axis in 0..3 {
-        if let (Some(lo), Some(hi), Some(blo), Some(bhi)) = (
-            out[0].get_mut(axis),
-            out[1].get_mut(axis),
-            b[0].get(axis),
-            b[1].get(axis),
-        ) {
+        if let (Some(lo), Some(blo)) = (out[0].get_mut(axis), b[0].get(axis)) {
             *lo = lo.min(*blo);
+        }
+        if let (Some(hi), Some(bhi)) = (out[1].get_mut(axis), b[1].get(axis)) {
             *hi = hi.max(*bhi);
         }
     }

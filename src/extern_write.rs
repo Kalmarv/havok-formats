@@ -12,14 +12,15 @@
 //!
 //! The bytes of the nodes are written as [`crate::bvtree_write`] and [`crate::simd_write`] document: the stock topology is
 //! not reproduced (in the version 3 meshes of up to 32 triangles the leaves are four consecutive keys to a node; the
-//! writer splits at medians), the boxes and the numbering are the files'.
+//! writer's aabb tree is a [`sah_shape`](crate::bvtree_write::sah_shape) and its simd tree splits at medians), the boxes
+//! and the numbering are the files'.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
 use crate::bvtree::NodeWidth;
-use crate::bvtree_write::{Aabb, Shape, balanced_shape, encode_tree};
+use crate::bvtree_write::{Aabb, Shape, encode_tree, sah_shape};
 use crate::schema::{Schema, put_f32s, put_uint};
 use crate::simd_write::{SimdEncoding, SimdLeaf, build_simd_tree, node_bytes};
 use crate::{Result, TagfileImage, invalid};
@@ -110,15 +111,12 @@ pub fn replace_extern_mesh(
                 })?;
             for axis in 0..3 {
                 let x = p.get(axis).copied().unwrap_or(0.0);
-                if let (Some(l), Some(h), Some(dl), Some(dh)) = (
-                    low.get_mut(axis),
-                    high.get_mut(axis),
-                    domain[0].get_mut(axis),
-                    domain[1].get_mut(axis),
-                ) {
+                if let (Some(l), Some(dl)) = (low.get_mut(axis), domain[0].get_mut(axis)) {
                     *l = l.min(f64::from(x));
-                    *h = h.max(f64::from(x));
                     *dl = dl.min(x);
+                }
+                if let (Some(h), Some(dh)) = (high.get_mut(axis), domain[1].get_mut(axis)) {
+                    *h = h.max(f64::from(x));
                     *dh = dh.max(x);
                 }
             }
@@ -236,7 +234,7 @@ pub fn replace_extern_mesh(
         if schema.size_of(node_type)? != 6 {
             return Err(invalid(0, "the aabb tree's nodes are not 6 bytes"));
         }
-        let (shape, order) = balanced_shape(&boxes)?;
+        let (shape, order) = sah_shape(&boxes)?;
         // the leaf payload is the triangle index
         let shape: Vec<Shape> = shape
             .into_iter()

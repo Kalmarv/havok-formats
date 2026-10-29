@@ -27,18 +27,22 @@
 //!   stored once).
 //! - The simd tree's leaf boxes are exactly the primitives' vertex boxes; its lane boxes exactly the unions below.
 //!
-//! What is not reproduced: how the stock builder chooses sections and tree topologies (the stock trees split neither
-//! at the median nor along the longest axis), the merging of coplanar triangle pairs into quads (about 17% of the
-//! stock keys are quad halves; every primitive written here is a triangle), the interior flags of the triangles
-//! (all zero here: 7% of the stock meshes have none set), custom and extern primitives, and the connectivity.
-//! A tree of another topology is read the same way.
+//! Sections are cut by the surface-area heuristic over the triangles' boxes ([`crate::bvtree_write`] has what the stock
+//! trees show of this) and the trees over their primitives and over the sections are [`sah_shape`]s.
+//!
+//! What is not reproduced: the stock builder's own splits above 16 leaves, the merging of triangle pairs into quads
+//! (about 17% of the stock keys are quad halves; every primitive written here is a triangle), the interior flags of the
+//! triangles (all zero here; none is set in 11% of Sekiro's meshes and 25% of Elden Ring's; a set one is on a triangle
+//! whose three edges all meet another triangle in 8,080,707 of 8,080,712 cases in Sekiro and 25,136,048 of 25,136,262 in
+//! Elden Ring, and of those triangles 41% and 44% have it set, with no feature of the triangles tried to predict which),
+//! custom and extern primitives, and the connectivity. A tree of another topology is read the same way.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
 use crate::bvtree::NodeWidth;
-use crate::bvtree_write::{Aabb, balanced_shape, encode_tree};
+use crate::bvtree_write::{Aabb, encode_tree, sah_shape, sah_split};
 use crate::schema::{Schema, put_f32s, put_uint};
 use crate::simd_write::{SimdEncoding, SimdLeaf, build_simd_tree, node_bytes};
 use crate::simdtree::SimdNode;
@@ -268,20 +272,17 @@ fn distinct_vertices(
     count
 }
 
-/// Split the triangles into sections: halve a group at the median of its triangles' centres along the longest axis
-/// until it has at most [`MAX_PRIMITIVES`] triangles using at most [`MAX_SLOTS`] vertices. Sections come out in the
-/// order of the splits.
-fn partition(kept: &[Kept], vertices: &[[f32; 3]]) -> Result<Vec<Vec<usize>>> {
-    let mut centres: Vec<[f32; 3]> = Vec::with_capacity(kept.len());
+/// Split the triangles into sections: split a group by the surface-area heuristic over the boxes of its triangles (grown
+/// by `radius`, [`sah_split`]) until it has at most [`MAX_PRIMITIVES`] triangles using at most [`MAX_SLOTS`] vertices.
+/// Sections come out in the order of the splits, the low side first.
+fn partition(kept: &[Kept], vertices: &[[f32; 3]], radius: f64) -> Result<Vec<Vec<usize>>> {
+    let mut boxes: Vec<Aabb> = Vec::with_capacity(kept.len());
     for k in kept {
-        let mut c = [0.0f32; 3];
-        for v in k.corners {
-            let p = vertex(vertices, v)?;
-            for (sum, x) in c.iter_mut().zip(p) {
-                *sum += x;
-            }
+        let mut points = [[0.0f32; 3]; 3];
+        for (slot, v) in points.iter_mut().zip(k.corners) {
+            *slot = vertex(vertices, v)?;
         }
-        centres.push(c);
+        boxes.push(grown_box(&points, radius));
     }
     let mut stamp = vec![0usize; vertices.len()];
     let mut mark = 0usize;
@@ -295,31 +296,8 @@ fn partition(kept: &[Kept], vertices: &[[f32; 3]]) -> Result<Vec<Vec<usize>>> {
             out.push(group);
             continue;
         }
-        let axis = (0..3)
-            .max_by(|&a, &b| {
-                let spread = |axis: usize| {
-                    let mut low = f32::MAX;
-                    let mut high = f32::MIN;
-                    for &t in &group {
-                        let c = centres.get(t).and_then(|c| c.get(axis)).copied().unwrap_or(0.0);
-                        low = low.min(c);
-                        high = high.max(c);
-                    }
-                    high - low
-                };
-                spread(a)
-                    .partial_cmp(&spread(b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .unwrap_or(0);
-        group.sort_unstable_by(|&a, &b| {
-            let ca = centres.get(a).and_then(|c| c.get(axis)).copied().unwrap_or(0.0);
-            let cb = centres.get(b).and_then(|c| c.get(axis)).copied().unwrap_or(0.0);
-            ca.partial_cmp(&cb)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.cmp(&b))
-        });
-        let second = group.split_off(group.len() >> 1);
+        let low = sah_split(&boxes, &mut group);
+        let second = group.split_off(low);
         // the first half is taken first
         stack.push(second);
         stack.push(group);
@@ -430,7 +408,7 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
     let mut triangle_keys: Vec<Option<u32>> = vec![None; source.triangles.len()];
 
     // sections, in the order of a tree over their (unquantised) boxes, so that a section's number is its leaf's payload
-    let groups = partition(&kept, verts)?;
+    let groups = partition(&kept, verts, r)?;
     let rough: Vec<Aabb> = groups
         .iter()
         .map(|g| {
@@ -443,7 +421,7 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
             grown_box(&points, r)
         })
         .collect();
-    let (mesh_shape, section_order) = balanced_shape(&rough)?;
+    let (mesh_shape, section_order) = sah_shape(&rough)?;
     let sections_tris: Vec<&Vec<usize>> = section_order.iter().filter_map(|&g| groups.get(g)).collect();
     let section_count = sections_tris.len();
     if section_count > 0x00ff_ffff {
@@ -617,7 +595,7 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
             leaf_boxes.push(grown_box(&points, r));
             tri_slots.push(slots);
         }
-        let (shape, order) = balanced_shape(&leaf_boxes)?;
+        let (shape, order) = sah_shape(&leaf_boxes)?;
         let section_domain = outward(&grown_box(&positions, r));
         let tree = encode_tree(NodeWidth::Four, section_domain, &shape, &|payload| {
             order
