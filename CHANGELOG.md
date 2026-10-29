@@ -157,7 +157,6 @@ Havok 6.6 headers for the other `hkp` ones; HKLib's 2018.1 classes for `hka`, `h
 - Tests: `tests/enums.rs` and the section-flag test in `src/mesh.rs` (new corpora `havok-enums`, a Sekiro and an Elden
   Ring set of the smallest tagfiles that show each value), the SHRED metadata compared with the enumerations, the
   hand-built packfile scene now stores its handle type.
-## 0.8.1 (2026-10-28)
 
 Spline compression written as well as read: the stored block values kept exactly, an encoder, and an animation written
 into its file.
