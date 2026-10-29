@@ -34,9 +34,9 @@
 //! has the rule, which reproduces the stock flags exactly).
 //!
 //! Quads: by default every primitive written is a triangle. With [`Primitives::PairedQuads`] the triangle pairs the stock
-//! tool joins ([`pair_quads`] has the rule; about 17% of the stock keys are quad halves) become quad primitives
-//! `[a, b, c, d]`, the first half `a b c` at the primitive's key and the second half `a c d` at the key with the half bit
-//! set; the quads are never flat (`primitiveStoresIsFlatConvex` stays 0).
+//! tool joins ([`pair_quads`] has the rule; about a quarter of the stock triangles are quad halves, 28% in Sekiro and 23%
+//! in Elden Ring) become quad primitives `[a, b, c, d]`, the first half `a b c` at the primitive's key and the second half
+//! `a c d` at the key with the half bit set; the quads are never flat (`primitiveStoresIsFlatConvex` stays 0).
 //!
 //! What is not reproduced: the stock builder's own splits above 16 leaves, custom and extern primitives, and the
 //! connectivity. A tree of another topology is read the same way.
@@ -452,7 +452,7 @@ pub enum Primitives {
     /// One primitive per triangle.
     Triangles,
     /// Triangles that [`pair_quads`] pairs are joined into quad primitives (the first half's key has the half bit clear,
-    /// the second half's set), as the stock tool does for about a sixth of its triangles. The pairs are looked for over
+    /// the second half's set), as the stock tool does for about a quarter of its triangles. The pairs are looked for over
     /// the whole mesh before the sections are cut, where the stock tool pairs within a section.
     PairedQuads,
 }
