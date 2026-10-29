@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 (2026-10-29)
 
 Navigation: `navmesh` reads the Havok AI objects of the games' navmesh binders (`*.nvmhktbnd.dcx`), checked on the 1,509
 Sekiro and 7,438 Elden Ring tagfiles of both installs.
