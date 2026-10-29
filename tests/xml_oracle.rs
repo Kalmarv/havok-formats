@@ -81,7 +81,11 @@ fn crc_table() -> [u32; 256] {
     for (i, slot) in table.iter_mut().enumerate() {
         let mut c = i as u32;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *slot = c;
     }
@@ -127,7 +131,14 @@ fn digest(game: Game, expected: &Digest) -> Result<(), Failure> {
     }
     assert_eq!(files.len(), expected.files);
     assert_eq!(bytes, expected.bytes, "bytes of XML text");
-    assert_eq!(counts.into_iter().collect::<Vec<_>>(), expected.elements.iter().map(|&(n, c)| (n.to_owned(), c)).collect::<Vec<_>>());
+    assert_eq!(
+        counts.into_iter().collect::<Vec<_>>(),
+        expected
+            .elements
+            .iter()
+            .map(|&(n, c)| (n.to_owned(), c))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(crc, expected.crc32, "CRC-32 of the XML text");
     Ok(())
 }

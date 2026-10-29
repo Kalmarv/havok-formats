@@ -39,9 +39,10 @@ fn sort_range<T: Copy>(list: &mut [T], lo: isize, hi: isize, less: &dyn Fn(&T, &
                 break;
             }
             if j != i
-                && let (Ok(a), Ok(b)) = (usize::try_from(i), usize::try_from(j)) {
-                    list.swap(a, b);
-                }
+                && let (Ok(a), Ok(b)) = (usize::try_from(i), usize::try_from(j))
+            {
+                list.swap(a, b);
+            }
             j = j.saturating_sub(1);
             i = i.saturating_add(1);
             if i > j {

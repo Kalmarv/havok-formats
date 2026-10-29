@@ -344,13 +344,14 @@ fn distinct_vertices(
         let Some(k) = kept.get(t) else { continue };
         for &v in k.used() {
             if let Some(slot) = usize::try_from(v).ok().and_then(|v| stamp.get_mut(v))
-                && *slot != mark {
-                    *slot = mark;
-                    count = count.saturating_add(1);
-                    if count > limit {
-                        return count;
-                    }
+                && *slot != mark
+            {
+                *slot = mark;
+                count = count.saturating_add(1);
+                if count > limit {
+                    return count;
                 }
+            }
         }
     }
     count
@@ -747,10 +748,11 @@ pub fn build_compressed_mesh_with(source: &MeshSource<'_>, options: &BuildOption
             packed_vertices.push(code);
             positions.push(packed_position32(code, scale, offset).map_err(|e| invalid(0, e.to_string()))?);
             if let Ok(i) = usize::try_from(v)
-                && let (Some(stamp), Some(slot)) = (slot_stamp.get_mut(i), slot_of.get_mut(i)) {
-                    *stamp = s;
-                    *slot = n;
-                }
+                && let (Some(stamp), Some(slot)) = (slot_stamp.get_mut(i), slot_of.get_mut(i))
+            {
+                *stamp = s;
+                *slot = n;
+            }
         }
         // the shared vertices: on the page the shared array is appending to
         let (page, indexes) =
@@ -769,10 +771,11 @@ pub fn build_compressed_mesh_with(source: &MeshSource<'_>, options: &BuildOption
             shared_vertex_index
                 .push(u16::try_from(entry).map_err(|_| invalid(0, "a shared entry past its page"))?);
             if let Ok(i) = usize::try_from(v)
-                && let (Some(stamp), Some(slot)) = (slot_stamp.get_mut(i), slot_of.get_mut(i)) {
-                    *stamp = s;
-                    *slot = packed_ids.len().saturating_add(n);
-                }
+                && let (Some(stamp), Some(slot)) = (slot_stamp.get_mut(i), slot_of.get_mut(i))
+            {
+                *stamp = s;
+                *slot = packed_ids.len().saturating_add(n);
+            }
         }
         // the primitives: the leaves of the section's tree in order
         let slot = |v: u32| -> Result<usize> {

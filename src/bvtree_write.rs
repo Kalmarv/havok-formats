@@ -96,13 +96,15 @@ pub fn union(a: &Aabb, b: &Aabb) -> Aabb {
     let mut out = *a;
     for axis in 0..3 {
         if let (Some(lo), Some(blo)) = (out[0].get_mut(axis), b[0].get(axis))
-            && *blo < *lo {
-                *lo = *blo;
-            }
+            && *blo < *lo
+        {
+            *lo = *blo;
+        }
         if let (Some(hi), Some(bhi)) = (out[1].get_mut(axis), b[1].get(axis))
-            && *bhi > *hi {
-                *hi = *bhi;
-            }
+            && *bhi > *hi
+        {
+            *hi = *bhi;
+        }
     }
     out
 }

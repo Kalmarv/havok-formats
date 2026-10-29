@@ -706,12 +706,13 @@ fn variables<'t, 'a>(
         ));
     }
     if let Some(bounds) = &bounds
-        && bounds.len() != infos.len() {
-            return Err(invalid(
-                at.at(),
-                format!("{} variable infos but {} bounds", infos.len(), bounds.len()),
-            ));
-        }
+        && bounds.len() != infos.len()
+    {
+        return Err(invalid(
+            at.at(),
+            format!("{} variable infos but {} bounds", infos.len(), bounds.len()),
+        ));
+    }
     let values = values.ok_or_else(|| invalid(at.at(), "no initial variable values"))?;
     let words = values.word_variable_values()?;
     let quads = values.quad_variable_values()?;
