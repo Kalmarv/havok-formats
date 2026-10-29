@@ -33,6 +33,7 @@
 )]
 use std::collections::BTreeMap;
 
+use crate::gamesort::game_sort_by;
 use crate::{Result, invalid};
 
 type V3 = [f32; 3];
@@ -225,57 +226,11 @@ fn build_links(prims: &[InteriorPrimitive]) -> BTreeMap<u32, [u32; 3]> {
     links
 }
 
-/// The quicksort the stock tool sorts with, on `(key, value)` pairs by value: the pivot is the value in the middle of the
-/// range, a pair moves when it is on the wrong side of the pivot strictly, and pairs that are neither stay where the
-/// partition leaves them. It is not stable; equal values come out in the order this procedure gives them.
+/// The quicksort the stock tool sorts with, on `(key, value)` pairs by value ([`game_sort_by`]): the pivot is the value in
+/// the middle of the range, a pair moves when it is on the wrong side of the pivot strictly, and pairs that are neither stay
+/// where the partition leaves them. It is not stable; equal values come out in the order this procedure gives them.
 pub fn game_sort(list: &mut [(u32, f32)]) {
-    let n = list.len();
-    if n > 1 {
-        sort_range(list, 0, isize::try_from(n.saturating_sub(1)).unwrap_or(0));
-    }
-}
-
-fn value_at(list: &[(u32, f32)], i: isize) -> f32 {
-    usize::try_from(i)
-        .ok()
-        .and_then(|i| list.get(i))
-        .map_or(f32::NAN, |p| p.1)
-}
-
-fn sort_range(list: &mut [(u32, f32)], lo: isize, hi: isize) {
-    let mut lo = lo;
-    loop {
-        let (mut i, mut j) = (lo, hi);
-        let pivot = value_at(list, lo.saturating_add(hi) >> 1);
-        loop {
-            while value_at(list, i) < pivot {
-                i = i.saturating_add(1);
-            }
-            while pivot < value_at(list, j) {
-                j = j.saturating_sub(1);
-            }
-            if j < i {
-                break;
-            }
-            if j != i {
-                if let (Ok(a), Ok(b)) = (usize::try_from(i), usize::try_from(j)) {
-                    list.swap(a, b);
-                }
-            }
-            j = j.saturating_sub(1);
-            i = i.saturating_add(1);
-            if i > j {
-                break;
-            }
-        }
-        if lo < j {
-            sort_range(list, lo, j);
-        }
-        if hi <= i {
-            return;
-        }
-        lo = i;
-    }
+    game_sort_by(list, &|a, b| a.1 < b.1);
 }
 
 /// The polygon a key stands for in the pass: its corners and the links of its edges. A flat quad is one polygon (by its

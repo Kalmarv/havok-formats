@@ -33,9 +33,13 @@
 //! The interior flags of the shape (`triangleIsInterior`) are computed from the written triangles ([`crate::interior_keys`]
 //! has the rule, which reproduces the stock flags exactly).
 //!
-//! What is not reproduced: the stock builder's own splits above 16 leaves, the merging of triangle pairs into quads
-//! (about 17% of the stock keys are quad halves; every primitive written here is a triangle), custom and extern
-//! primitives, and the connectivity. A tree of another topology is read the same way.
+//! Quads: by default every primitive written is a triangle. With [`Primitives::PairedQuads`] the triangle pairs the stock
+//! tool joins ([`pair_quads`] has the rule; about 17% of the stock keys are quad halves) become quad primitives
+//! `[a, b, c, d]`, the first half `a b c` at the primitive's key and the second half `a c d` at the key with the half bit
+//! set; the quads are never flat (`primitiveStoresIsFlatConvex` stays 0).
+//!
+//! What is not reproduced: the stock builder's own splits above 16 leaves, custom and extern primitives, and the
+//! connectivity. A tree of another topology is read the same way.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -44,6 +48,7 @@
 use crate::bvtree::NodeWidth;
 use crate::bvtree_write::{Aabb, encode_tree, sah_shape, sah_split};
 use crate::interior::{MeshView, SectionView, interior_keys, primitives_of};
+use crate::quads::{QuadCandidate, pair_quads};
 use crate::schema::{Schema, put_f32s, put_uint};
 use crate::simd_write::{SimdEncoding, SimdLeaf, build_simd_tree, node_bytes};
 use crate::simdtree::SimdNode;
@@ -116,7 +121,7 @@ pub struct BuiltMesh {
     pub mesh_nodes: Vec<u8>,
     /// The sections.
     pub sections: Vec<BuiltSection>,
-    /// All primitives' vertex indices, by section.
+    /// All primitives' vertex indices, by section (`[a, b, c, c]` for a triangle, `[a, b, c, d]` for a quad).
     pub primitives: Vec<[u8; 4]>,
     /// The shared-vertex index: 16-bit entries, by section.
     pub shared_vertex_index: Vec<u16>,
@@ -134,8 +139,8 @@ pub struct BuiltMesh {
     pub bits_per_key: u32,
     /// The convex radius the boxes were grown by.
     pub convex_radius: f32,
-    /// For each source triangle, the shape key it got; `None` for one left out (a triangle with a repeated vertex, or two
-    /// vertices at one position).
+    /// For each source triangle, the shape key it got (the second half of a quad has the half bit set); `None` for one left
+    /// out (a triangle with a repeated vertex, or two vertices at one position).
     pub triangle_keys: Vec<Option<u32>>,
     /// The simd tree's leaves: each primitive's key (its first half) and exact vertex box.
     pub simd_leaves: Vec<SimdLeaf>,
@@ -227,11 +232,23 @@ impl SharedArray {
     }
 }
 
-/// A triangle kept for the build: its index in the source and its vertex indices.
+/// A primitive kept for the build: a triangle, or a quad made of two triangles.
 #[derive(Debug, Clone, Copy)]
 struct Kept {
+    /// The source triangle that is the primitive's first half.
     source: usize,
-    corners: [u32; 3],
+    /// The source triangle that is its second half, for a quad.
+    partner: Option<usize>,
+    /// The primitive's four vertex indices (a triangle repeats its third).
+    corners: [u32; 4],
+}
+
+impl Kept {
+    /// The distinct corners the primitive names.
+    fn used(&self) -> &[u32] {
+        let count = if self.partner.is_some() { 4 } else { 3 };
+        self.corners.get(..count).unwrap_or(&[])
+    }
 }
 
 fn vertex(vertices: &[[f32; 3]], index: u32) -> Result<[f32; 3]> {
@@ -247,6 +264,47 @@ fn vertex(vertices: &[[f32; 3]], index: u32) -> Result<[f32; 3]> {
         })
 }
 
+/// The primitives of `kept` (all triangles) with the pairs [`pair_quads`] finds joined into quads: a quad keeps its first
+/// half's corners and takes the second half's third corner as its fourth. The primitives come out in the order of their
+/// first halves.
+fn join_quads(kept: &[Kept], vertices: &[[f32; 3]]) -> Result<Vec<Kept>> {
+    let mut candidates = Vec::with_capacity(kept.len());
+    for k in kept {
+        let [a, b, c, _] = k.corners;
+        candidates.push(QuadCandidate {
+            vertices: [vertex(vertices, a)?, vertex(vertices, b)?, vertex(vertices, c)?],
+            data: 0,
+        });
+    }
+    let mut second_of: Vec<Option<usize>> = vec![None; kept.len()];
+    let mut is_second = vec![false; kept.len()];
+    for [first, second] in pair_quads(&candidates) {
+        if let (Some(slot), Some(flag)) = (second_of.get_mut(first), is_second.get_mut(second)) {
+            *slot = Some(second);
+            *flag = true;
+        }
+    }
+    let mut out = Vec::with_capacity(kept.len());
+    for (i, k) in kept.iter().enumerate() {
+        if is_second.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        match second_of.get(i).copied().flatten().and_then(|s| kept.get(s)) {
+            Some(second) => {
+                let [a, b, c, _] = k.corners;
+                let [_, _, d, _] = second.corners;
+                out.push(Kept {
+                    source: k.source,
+                    partner: Some(second.source),
+                    corners: [a, b, c, d],
+                });
+            }
+            None => out.push(*k),
+        }
+    }
+    Ok(out)
+}
+
 /// How many distinct vertices the triangles `group` use, up to `limit + 1`; `stamp` and `mark` keep the count O(group).
 fn distinct_vertices(
     kept: &[Kept],
@@ -258,7 +316,7 @@ fn distinct_vertices(
     let mut count = 0usize;
     for &t in group {
         let Some(k) = kept.get(t) else { continue };
-        for &v in &k.corners {
+        for &v in k.used() {
             if let Some(slot) = usize::try_from(v).ok().and_then(|v| stamp.get_mut(v)) {
                 if *slot != mark {
                     *slot = mark;
@@ -279,10 +337,11 @@ fn distinct_vertices(
 fn partition(kept: &[Kept], vertices: &[[f32; 3]], radius: f64) -> Result<Vec<Vec<usize>>> {
     let mut boxes: Vec<Aabb> = Vec::with_capacity(kept.len());
     for k in kept {
-        let mut points = [[0.0f32; 3]; 3];
-        for (slot, v) in points.iter_mut().zip(k.corners) {
-            *slot = vertex(vertices, v)?;
-        }
+        let points = k
+            .used()
+            .iter()
+            .map(|&v| vertex(vertices, v))
+            .collect::<Result<Vec<_>>>()?;
         boxes.push(grown_box(&points, radius));
     }
     let mut stamp = vec![0usize; vertices.len()];
@@ -384,6 +443,22 @@ fn pack64(p: [f32; 3], min: [f32; 3], max: [f32; 3]) -> u64 {
 /// Refused: no triangle left; a vertex that is not finite; an index past the vertices; a convex radius that is negative or
 /// not finite; more sections or shared vertices than the file's fields number.
 pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
+    build_compressed_mesh_with(source, Primitives::Triangles)
+}
+
+/// What the primitives of a built mesh are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Primitives {
+    /// One primitive per triangle.
+    Triangles,
+    /// Triangles that [`pair_quads`] pairs are joined into quad primitives (the first half's key has the half bit clear,
+    /// the second half's set), as the stock tool does for about a sixth of its triangles. The pairs are looked for over
+    /// the whole mesh before the sections are cut, where the stock tool pairs within a section.
+    PairedQuads,
+}
+
+/// [`build_compressed_mesh`] with the choice of [`Primitives`].
+pub fn build_compressed_mesh_with(source: &MeshSource<'_>, primitives_kind: Primitives) -> Result<BuiltMesh> {
     let verts = source.vertices;
     let radius = source.convex_radius;
     if !radius.is_finite() || radius < 0.0 {
@@ -401,10 +476,17 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
         if a == b || b == c || a == c || pa == pb || pb == pc || pa == pc {
             continue;
         }
-        kept.push(Kept { source: i, corners });
+        kept.push(Kept {
+            source: i,
+            partner: None,
+            corners: [a, b, c, c],
+        });
     }
     if kept.is_empty() {
         return Err(invalid(0, "no triangle to build a mesh from"));
+    }
+    if primitives_kind == Primitives::PairedQuads {
+        kept = join_quads(&kept, verts)?;
     }
     let mut triangle_keys: Vec<Option<u32>> = vec![None; source.triangles.len()];
 
@@ -416,7 +498,7 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
             let points: Vec<[f32; 3]> = g
                 .iter()
                 .filter_map(|&t| kept.get(t))
-                .flat_map(|k| k.corners)
+                .flat_map(|k| k.used().iter().copied())
                 .filter_map(|v| vertex(verts, v).ok())
                 .collect();
             grown_box(&points, r)
@@ -435,7 +517,7 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
     for (s, group) in sections_tris.iter().enumerate() {
         for &t in group.iter() {
             let Some(k) = kept.get(t) else { continue };
-            for v in k.corners {
+            for &v in k.used() {
                 let Ok(i) = usize::try_from(v) else {
                     continue;
                 };
@@ -459,7 +541,7 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
     // the shared vertices' box: the mesh's vertices grown by the radius
     let used: Vec<[f32; 3]> = kept
         .iter()
-        .flat_map(|k| k.corners)
+        .flat_map(|k| k.used().iter().copied())
         .filter_map(|v| vertex(verts, v).ok())
         .collect();
     let domain = outward(&grown_box(&used, r));
@@ -484,7 +566,7 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
         let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         for &t in group.iter() {
             let Some(k) = kept.get(t) else { continue };
-            for v in k.corners {
+            for &v in k.used() {
                 if !seen.insert(v) {
                     continue;
                 }
@@ -584,14 +666,14 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
                 .ok_or_else(|| invalid(0, "a vertex without a slot"))
         };
         let mut leaf_boxes: Vec<Aabb> = Vec::with_capacity(group.len());
-        let mut tri_slots: Vec<[usize; 3]> = Vec::with_capacity(group.len());
+        let mut tri_slots: Vec<[usize; 4]> = Vec::with_capacity(group.len());
         for &t in group.iter() {
             let k = kept
                 .get(t)
                 .copied()
                 .ok_or_else(|| invalid(0, "a triangle past the kept ones"))?;
-            let [a, b, c] = k.corners;
-            let slots = [slot(a)?, slot(b)?, slot(c)?];
+            let [a, b, c, d] = k.corners;
+            let slots = [slot(a)?, slot(b)?, slot(c)?, slot(d)?];
             let points: Vec<[f32; 3]> = slots.iter().filter_map(|&i| positions.get(i).copied()).collect();
             leaf_boxes.push(grown_box(&points, r));
             tri_slots.push(slots);
@@ -611,23 +693,28 @@ pub fn build_compressed_mesh(source: &MeshSource<'_>) -> Result<BuiltMesh> {
                 .copied()
                 .ok_or_else(|| invalid(0, "a leaf past the triangles"))?;
             let bytes = slots.map(|x| u8::try_from(x).map_err(|_| invalid(0, "a vertex slot past a byte")));
-            let [a, b, c] = bytes;
-            let (a, b, c) = (a?, b?, c?);
-            primitives.push([a, b, c, c]);
+            let [a, b, c, d] = bytes;
+            primitives.push([a?, b?, c?, d?]);
             let key = u32::try_from(s)
                 .ok()
                 .and_then(|s| s.checked_mul(256))
                 .zip(u32::try_from(k).ok().and_then(|k| k.checked_mul(2)))
                 .map(|(s, k)| s | k)
                 .ok_or_else(|| invalid(0, "a shape key past 32 bits"))?;
-            max_key = max_key.max(key);
-            let source_index = group
+            let primitive = group
                 .get(i)
                 .and_then(|&t| kept.get(t))
-                .map(|k| k.source)
                 .ok_or_else(|| invalid(0, "a leaf past the triangles"))?;
-            if let Some(slot) = triangle_keys.get_mut(source_index) {
+            if let Some(slot) = triangle_keys.get_mut(primitive.source) {
                 *slot = Some(key);
+            }
+            // a quad's second half has the half bit set, and the largest key counts it
+            max_key = max_key.max(key);
+            if let Some(second) = primitive.partner {
+                if let Some(slot) = triangle_keys.get_mut(second) {
+                    *slot = Some(key | 1);
+                }
+                max_key = max_key.max(key | 1);
             }
             let points: Vec<[f32; 3]> = slots.iter().filter_map(|&x| positions.get(x).copied()).collect();
             let b = grown_box(&points, 0.0);
@@ -731,7 +818,7 @@ impl BuiltMesh {
     }
 
     /// The triangles the arrays decode to, the way [`compressed_mesh`](crate::compressed_mesh) reads a file: in key
-    /// order, each with its key and vertices.
+    /// order, each with its key and vertices (a quad gives its two halves).
     pub fn triangles(&self) -> Result<Vec<Triangle>> {
         let mut out = Vec::with_capacity(self.primitives.len());
         for (s, section) in self.sections.iter().enumerate() {
@@ -782,6 +869,13 @@ impl BuiltMesh {
                     key,
                     vertices: [vertex(p[0])?, vertex(p[1])?, vertex(p[2])?],
                 });
+                // a quad's second half is `a c d`
+                if p[3] != p[2] {
+                    out.push(Triangle {
+                        key: key | 1,
+                        vertices: [vertex(p[0])?, vertex(p[2])?, vertex(p[3])?],
+                    });
+                }
             }
         }
         Ok(out)
@@ -1343,6 +1437,48 @@ mod tests {
         assert_eq!(decoded[0].key, 0);
         assert_eq!(decoded[0].vertices[0], [0.0, 0.0, 0.0]);
         assert_eq!(decoded[1].key, 2);
+    }
+
+    /// The unit square again, with the triangles listed as `a b c` and `a c d` so that the diagonal is the third edge of the
+    /// first and the first edge of the second: they become one quad primitive, the second half at the key with the half
+    /// bit set. (The square of the test above lists them with the diagonal as the second edge of one and the third of the other: no quad.)
+    #[test]
+    fn a_square_listed_as_abc_acd_builds_as_one_quad() {
+        let vertices = [
+            [0.0f32, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ];
+        let triangles = [[0u32, 1, 3], [0, 3, 2]];
+        let source = MeshSource {
+            vertices: &vertices,
+            triangles: &triangles,
+            convex_radius: 0.01,
+        };
+        let plain = build_compressed_mesh(&source).unwrap();
+        assert_eq!(plain.primitives.len(), 2);
+        let built = build_compressed_mesh_with(&source, Primitives::PairedQuads).unwrap();
+        // slots by first use: vertex 0, 1, 3, then 2
+        assert_eq!(built.primitives, [[0, 1, 2, 3]]);
+        assert_eq!(built.sections[0].primitives, 1);
+        assert_eq!(built.triangle_keys, [Some(0), Some(1)]);
+        assert_eq!(
+            (built.num_primitive_keys, built.max_key_value, built.bits_per_key),
+            (1, 1, 2)
+        );
+        assert_eq!(built.data_runs, [(0xffff, 0, 1)]);
+        assert_eq!(built.simd_leaves.len(), 1);
+        assert_eq!(built.simd_leaves[0].key, 0);
+        let decoded = built.triangles().unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!((decoded[0].key, decoded[1].key), (0, 1));
+        let near = |p: [f32; 3], q: [f32; 3]| p.iter().zip(&q).all(|(a, b)| (a - b).abs() < 1e-5);
+        // a b c = vertices 0 1 3, and a c d = vertices 0 3 2
+        assert!(near(decoded[0].vertices[1], vertices[1]) && near(decoded[0].vertices[2], vertices[3]));
+        assert!(near(decoded[1].vertices[1], vertices[3]) && near(decoded[1].vertices[2], vertices[2]));
+        // a lone square has an open boundary on every edge: no interior flag
+        assert!(built.interior_keys().unwrap().is_empty());
     }
 
     #[test]

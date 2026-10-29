@@ -109,6 +109,7 @@ pub mod constraint;
 pub mod convex;
 mod extern_mesh;
 mod extern_write;
+mod gamesort;
 mod interior;
 mod mesh;
 pub mod navmesh;
@@ -118,6 +119,8 @@ pub mod packfile;
 mod polygon;
 
 mod mesh_write;
+
+mod quads;
 mod schema;
 mod section;
 mod simd_write;
@@ -137,6 +140,7 @@ pub use bvtree_write::{
 };
 pub use extern_mesh::{ExternMesh, extern_mesh};
 pub use extern_write::{ExternSource, extern_mesh_shapes, replace_extern_mesh};
+pub use gamesort::game_sort_by;
 pub use interior::{
     InteriorPrimitive, MeshView, SectionView, game_sort, interior_keys, primitives_of, rsqrt_estimate,
 };
@@ -145,9 +149,10 @@ pub use mesh::{
     compressed_mesh, extern_shapes, interior_primitives, mesh_sections,
 };
 pub use mesh_write::{
-    BuiltMesh, BuiltSection, MAX_PRIMITIVES, MAX_SLOTS, MeshSource, build_compressed_mesh,
-    compressed_mesh_shapes, replace_compressed_mesh,
+    BuiltMesh, BuiltSection, MAX_PRIMITIVES, MAX_SLOTS, MeshSource, Primitives, build_compressed_mesh,
+    build_compressed_mesh_with, compressed_mesh_shapes, replace_compressed_mesh,
 };
+pub use quads::{QuadCandidate, pair_quads};
 pub use simd_write::{EMPTY_BOX, SimdEncoding, SimdLeaf, build_simd_tree};
 mod tagfile;
 mod tagfile_write;
