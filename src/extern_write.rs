@@ -85,14 +85,13 @@ pub fn replace_extern_mesh(
     if source.vertices.iter().flatten().any(|c| !c.is_finite()) {
         return Err(invalid(0, "a vertex that is not finite"));
     }
-    if let Some(m) = source.materials {
-        if m.len() != source.triangles.len() {
+    if let Some(m) = source.materials
+        && m.len() != source.triangles.len() {
             return Err(invalid(
                 0,
                 format!("{} materials for {} triangles", m.len(), source.triangles.len()),
             ));
         }
-    }
     // the exact boxes of the triangles
     let mut boxes: Vec<Aabb> = Vec::with_capacity(source.triangles.len());
     let mut domain = [[f32::MAX; 3], [f32::MIN; 3]];

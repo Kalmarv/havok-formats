@@ -34,8 +34,11 @@ fn expected(list: Expected) -> Counts {
 
 // ---------------------------------------------------------------------------------------------------- SHRED (7.1)
 
+/// Files by name, with their bytes.
+type Files = Vec<(String, Vec<u8>)>;
+
 /// All 490 SHRED packfiles, by file name; `None` without them.
-fn shred_files() -> Result<Option<Vec<(String, Vec<u8>)>>, Failure> {
+fn shred_files() -> Result<Option<Files>, Failure> {
     let query = Query::Oracle(OracleSet::Corpus, Game::Shred, "havok-packfiles");
     let Some(dir) = resolve(query) else {
         return Ok(None);

@@ -356,10 +356,10 @@ fn a_built_mesh_written_into_either_layout_reads_back() {
             for key in built.interior_keys().unwrap() {
                 expected[(key / 32) as usize] |= 1 << (key % 32);
             }
-            for i in 0..words.len() {
+            for (i, &want) in expected.iter().enumerate() {
                 assert_eq!(
                     words.get(i).unwrap().unsigned().unwrap(),
-                    expected[i],
+                    want,
                     "{sdk:?} {class} word {i}"
                 );
             }

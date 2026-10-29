@@ -42,6 +42,16 @@ pub(crate) fn newell(corners: &[[f64; 3]]) -> [f64; 3] {
 /// the normal is dropped (`u`, `v`, in cyclic order) and a sign, which is -1 when that component is negative. A
 /// polygon that turns the way its normal says then has positive area in the plane (u, v) once its `u` is multiplied by
 /// the sign.
+/// The coordinate of `p` on `axis` (0 x, 1 y, 2 z).
+fn component(p: [f64; 3], axis: usize) -> f64 {
+    let [x, y, z] = p;
+    match axis {
+        0 => x,
+        1 => y,
+        _ => z,
+    }
+}
+
 pub(crate) fn plane(normal: [f64; 3]) -> (usize, usize, f64) {
     let [x, y, z] = normal.map(f64::abs);
     let (axis, u, v) = if x >= y && x >= z {
@@ -77,14 +87,16 @@ pub fn triangulate(corners: &[[f64; 3]]) -> (Vec<[usize; 3]>, bool) {
     let turn = |a: usize, b: usize, c: usize| -> f64 {
         let (a, b, c) = (at(corners, a), at(corners, b), at(corners, c));
         let side = |p: [f64; 3], q: [f64; 3], r: [f64; 3]| {
-            (q[u] - p[u]) * (r[v] - q[v]) - (q[v] - p[v]) * (r[u] - q[u])
+            let c = component;
+            (c(q, u) - c(p, u)) * (c(r, v) - c(q, v)) - (c(q, v) - c(p, v)) * (c(r, u) - c(q, u))
         };
         sign * side(a, b, c)
     };
     // twice the signed area of the triangle a, b, p: positive when p is on the inner side of the directed edge a-b
     let inside = |a: usize, b: usize, p: [f64; 3]| -> f64 {
         let (a, b) = (at(corners, a), at(corners, b));
-        sign * ((b[u] - a[u]) * (p[v] - a[v]) - (b[v] - a[v]) * (p[u] - a[u]))
+        let c = component;
+        sign * ((c(b, u) - c(a, u)) * (c(p, v) - c(a, v)) - (c(b, v) - c(a, v)) * (c(p, u) - c(a, u)))
     };
     let mut ring: Vec<usize> = (0..count).collect();
     let mut triangles = Vec::with_capacity(count.saturating_sub(2));

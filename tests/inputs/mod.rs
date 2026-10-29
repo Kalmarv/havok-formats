@@ -115,6 +115,7 @@ primase_testdata::inputs! {
             gate: false,
             about: r#"seven navmesh tagfiles of the install (`hkaiNavMesh` beside an `hkaiStaticTreeNavMeshQueryMediator` and, in two, an `hkaiUserEdgeSetupArray`, Elden Ring's 2018.1 files), loose, each carrying its own type table, and `manifest.tsv` with the counts of each: an empty mesh, the smallest and the largest with a tree, an empty tree, the smallest and the largest with user edges, and the one with a face that ear clipping cannot finish; tests/navmesh.rs reads them"#,
             source: r#"the game's own files from the user's install: members of the `nvmhktbnd` binders of `m10`, `m12`, `m13`, `m34`, `m60_47_38` and `m60_49_37`, out of their DCX envelopes as stored, picked by reading all 7,438 navmesh tagfiles of the 695 binders"#,
+        },
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-enums") => {
             status: Live,
             gate: false,

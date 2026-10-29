@@ -367,12 +367,11 @@ impl StockTree {
             let lo = first_bin.get(axis).copied().unwrap_or(0);
             let hi = last_bin.get(axis).copied().unwrap_or(0);
             for at in lo..=hi {
-                if let Some(bin) = axis_bins.get(at) {
-                    if !bin.leaves.is_empty() && bin.cost < best {
+                if let Some(bin) = axis_bins.get(at)
+                    && !bin.leaves.is_empty() && bin.cost < best {
                         best = bin.cost;
                         choice = Some((axis, at));
                     }
-                }
             }
         }
         let (mut first, mut second): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
@@ -461,11 +460,10 @@ impl StockTree {
             self.set_parent(a, node);
             self.set_parent(b, node);
             let last = list.pop();
-            if j < list.len() {
-                if let (Some(slot), Some(last)) = (list.get_mut(j), last) {
+            if j < list.len()
+                && let (Some(slot), Some(last)) = (list.get_mut(j), last) {
                     *slot = last;
                 }
-            }
             if let Some(slot) = list.get_mut(i) {
                 *slot = node;
             }

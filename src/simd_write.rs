@@ -2,8 +2,8 @@
 //! boxes four to a node and numbers the nodes the way the games' files do, and the node bytes are written from the file's
 //! own type table.
 //!
-//! **What the stock files show** (every simd tree of the Sekiro and Elden Ring map, object and asset collision, 3,344
-//! + 22,899 compressed meshes and 12,688 + 264,858 extern meshes; the numbering below was tested on the 959 Sekiro and
+//! **What the stock files show** (every simd tree of the Sekiro and Elden Ring map, object and asset collision,
+//! 3,344 + 22,899 compressed meshes and 12,688 + 264,858 extern meshes; the numbering below was tested on the 959 Sekiro and
 //! 278,433 Elden Ring trees of 300 nodes or fewer, and holds for all of them):
 //!
 //! - Node 0 is a sentinel with four empty lanes, node 1 is the root, a child's index is above its parent's. A lane's

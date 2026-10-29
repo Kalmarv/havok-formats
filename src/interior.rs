@@ -577,7 +577,7 @@ mod tests {
                 .map(|(i, f)| {
                     triangle(
                         u32::try_from(i).unwrap() * 2,
-                        [f[0] as u32, f[1] as u32, f[2] as u32],
+                        f.map(|c| u32::try_from(c).unwrap()),
                         [v[f[0]], v[f[1]], v[f[2]]],
                     )
                 })

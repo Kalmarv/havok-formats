@@ -50,7 +50,7 @@
 )]
 use crate::bvtree::NodeWidth;
 use crate::bvtree_write::{Aabb, Shape, encode_tree, sah_shape, sah_split};
-use crate::degenerate::{DEFAULT_DEGENERATE_THRESHOLD, is_degenerate_triangle};
+use crate::degenerate::is_degenerate_triangle;
 use crate::interior::{MeshView, SectionView, interior_keys, primitives_of};
 use crate::quads::{QuadCandidate, pair_quads};
 use crate::schema::{Schema, put_f32s, put_uint};
@@ -343,15 +343,14 @@ fn distinct_vertices(
     for &t in group {
         let Some(k) = kept.get(t) else { continue };
         for &v in k.used() {
-            if let Some(slot) = usize::try_from(v).ok().and_then(|v| stamp.get_mut(v)) {
-                if *slot != mark {
+            if let Some(slot) = usize::try_from(v).ok().and_then(|v| stamp.get_mut(v))
+                && *slot != mark {
                     *slot = mark;
                     count = count.saturating_add(1);
                     if count > limit {
                         return count;
                     }
                 }
-            }
         }
     }
     count
@@ -496,14 +495,14 @@ pub enum Layout {
 }
 
 /// The choices of [`build_compressed_mesh_with`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BuildOptions {
     /// Triangles, or pairs of them joined into quads.
     pub primitives: Primitives,
     /// How sections and trees are laid out.
     pub layout: Layout,
     /// Leave out the triangles that [`is_degenerate_triangle`] calls degenerate with this threshold (the stock tool's own
-    /// is [`DEFAULT_DEGENERATE_THRESHOLD`]), on top of those with a repeated vertex. `None` keeps them.
+    /// is [`DEFAULT_DEGENERATE_THRESHOLD`](crate::DEFAULT_DEGENERATE_THRESHOLD)), on top of those with a repeated vertex. `None` keeps them.
     pub drop_degenerate: Option<f32>,
 }
 
@@ -747,12 +746,11 @@ pub fn build_compressed_mesh_with(source: &MeshSource<'_>, options: &BuildOption
             let code = pack32(p, offset, scale);
             packed_vertices.push(code);
             positions.push(packed_position32(code, scale, offset).map_err(|e| invalid(0, e.to_string()))?);
-            if let Ok(i) = usize::try_from(v) {
-                if let (Some(stamp), Some(slot)) = (slot_stamp.get_mut(i), slot_of.get_mut(i)) {
+            if let Ok(i) = usize::try_from(v)
+                && let (Some(stamp), Some(slot)) = (slot_stamp.get_mut(i), slot_of.get_mut(i)) {
                     *stamp = s;
                     *slot = n;
                 }
-            }
         }
         // the shared vertices: on the page the shared array is appending to
         let (page, indexes) =
@@ -770,12 +768,11 @@ pub fn build_compressed_mesh_with(source: &MeshSource<'_>, options: &BuildOption
             let entry = index.saturating_sub(page.saturating_mul(PAGE));
             shared_vertex_index
                 .push(u16::try_from(entry).map_err(|_| invalid(0, "a shared entry past its page"))?);
-            if let Ok(i) = usize::try_from(v) {
-                if let (Some(stamp), Some(slot)) = (slot_stamp.get_mut(i), slot_of.get_mut(i)) {
+            if let Ok(i) = usize::try_from(v)
+                && let (Some(stamp), Some(slot)) = (slot_stamp.get_mut(i), slot_of.get_mut(i)) {
                     *stamp = s;
                     *slot = packed_ids.len().saturating_add(n);
                 }
-            }
         }
         // the primitives: the leaves of the section's tree in order
         let slot = |v: u32| -> Result<usize> {
