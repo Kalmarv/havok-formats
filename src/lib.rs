@@ -20,10 +20,8 @@
 //!   [`mesh_trees`] and [`simd_tree`]), extern triangle meshes ([`extern_mesh`]),
 //!   convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, animation bindings and spline
 //!   compressed animation ([`animation`], [`spline`]), navigation meshes, their cluster graphs and query trees
-//!   ([`navmesh`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles ([`packfile::physics`]).
-
-//!   compressed animation ([`animation`], [`spline`]), the typed atoms of ragdoll and other constraints
-//!   ([`constraint`]), and the 7.1 `hkp` rigid bodies and collision shapes of packfiles ([`packfile::physics`]) with the
+//!   ([`navmesh`]), the typed atoms of ragdoll and other constraints ([`constraint`]), and the 7.1 `hkp` rigid bodies
+//!   and collision shapes of packfiles ([`packfile::physics`]) with the
 //!   MOPP code that indexes their triangles ([`mopp`]). The convex point sets of custom mesh primitives are decoded
 //!   ([`PointSet`]).
 //! - Collision written from triangles: [`build_compressed_mesh`] makes the mesh tree arrays of an `hknp` compressed mesh
