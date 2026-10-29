@@ -37,6 +37,8 @@ struct Section {
     first_primitive: u32,
     primitives: u8,
     page: u8,
+    /// The section's flags (`SectionFlags`): `REQUIRE_TREE` exactly when it holds a custom primitive.
+    flags: u8,
 }
 
 /// The `hkAabb` of every domain here: a shared vertex's three codes then decode to themselves (the step is exactly 1).
@@ -279,11 +281,12 @@ fn mesh_fixture(sdk: &[u8; 8], widths: Widths, tree: &Tree<'_>) -> Built<Vec<u8>
                 &((s.first_primitive << 8) | u32::from(s.primitives)).to_le_bytes(),
             );
             layout.put(base + 80, &[s.packed, s.shared_indices]);
-            layout.put(base + 84, &[s.page]);
+            layout.put(base + 84, &[s.page, s.flags]);
         } else {
             layout.put(base + 68, &s.first_shared.to_le_bytes());
             layout.put(base + 72, &s.first_primitive.to_le_bytes());
             layout.put(base + 80, &[s.packed, s.primitives, 0, s.page]);
+            layout.put(base + 87, &[s.flags]);
         }
     }
     // the simd tree: node by node, lanes as boxes and data words
@@ -386,6 +389,7 @@ fn two_pages_with(sdk: &[u8; 8], widths: Widths, page: u8, trees: &Trees) -> Bui
             first_primitive: 0,
             primitives: 1,
             page: 0,
+            flags: 0,
         },
         Section {
             first_packed: 0,
@@ -395,6 +399,7 @@ fn two_pages_with(sdk: &[u8; 8], widths: Widths, page: u8, trees: &Trees) -> Bui
             first_primitive: 1,
             primitives: 1,
             page,
+            flags: 0,
         },
     ];
     mesh_fixture(
@@ -857,6 +862,7 @@ fn point_set_fixture(
         first_primitive: 0,
         primitives: 1,
         page: 0,
+        flags: havok_formats::SectionFlags::REQUIRE_TREE,
     }];
     mesh_fixture(
         sdk,

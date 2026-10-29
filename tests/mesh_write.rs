@@ -54,6 +54,7 @@ const STORAGE: u32 = 30;
 const BITFIELD: u32 = 31;
 const POINTER_TO_DATA: u32 = 32;
 const SHAPE: u32 = 33;
+const U8X4: u32 = 34;
 
 /// The shape's data pointer and the data object's size, as the fixture lays them out.
 const SHAPE_SIZE: usize = 160;
@@ -125,7 +126,7 @@ fn definitions(sdk: &[u8; 8], class: &'static str) -> Vec<Definition> {
         fixed("T[N]<hkReal,6>", 6, REAL, 4),                             // 8
         record("hkcdCompressedAabbCodecs::Aabb4BytesCodec", 4, vec![]),  // 9
         record("hkcdCompressedAabbCodecs::Aabb5BytesCodec", 5, vec![]),  // 10
-        record("hkcdStaticMeshTree::Primitive", 4, vec![]),              // 11
+        record("hkcdStaticMeshTree::Primitive", 4, vec![("indices", 0, U8X4)]), // 11
         record(
             "hknpCompressedMeshShapeTreeDataRunData",
             2,
@@ -193,6 +194,7 @@ fn definitions(sdk: &[u8; 8], class: &'static str) -> Vec<Definition> {
                 ("triangleIndexToShapeKey", 136, ARRAY_U32),
             ],
         ), // 33
+        fixed("T[N]<hkUint8,4>", 4, U8, 1), // 34
     ]
 }
 

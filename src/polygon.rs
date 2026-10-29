@@ -232,8 +232,10 @@ mod tests {
         assert!(fanned.iter().any(|&t| t < 0.0), "{fanned:?}");
     }
 
+    /// A square with a straight corner on one side (corner 1, between 0 and 2) is cut into three triangles of area,
+    /// none of them the zero-area triangle of the straight corner, and they cover the square.
     #[test]
-    fn a_straight_corner_adds_no_triangle() {
+    fn a_straight_corner_makes_no_zero_area_triangle() {
         let line = [
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
@@ -243,7 +245,8 @@ mod tests {
         ];
         let (triangles, clean) = triangulate(&line);
         assert!(clean);
-        assert_eq!(triangles.len(), 2);
+        assert_eq!(triangles.len(), 3);
+        assert!(turns(&line, &triangles).iter().all(|&t| t > 0.0), "{triangles:?}");
         assert!((area(&line, &triangles).abs() - 8.0).abs() < 1e-12);
     }
 

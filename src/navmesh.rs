@@ -324,11 +324,11 @@ impl NavMesh {
                 user,
             });
         }
-        // an opposite edge is owned by the face named and points back
+        // an opposite edge is owned by the face named (checked for every edge first: a wrong owner also breaks the link
+        // back, and the owner is what is wrong) and points back
         for (i, edge) in edges.iter().enumerate() {
             let Some(link) = edge.opposite else { continue };
-            let other = edges.get(link.edge);
-            if other.map(|o| o.face) != Some(link.face) {
+            if edges.get(link.edge).map(|o| o.face) != Some(link.face) {
                 return Err(invalid(
                     at,
                     format!(
@@ -337,7 +337,10 @@ impl NavMesh {
                     ),
                 ));
             }
-            let back = other.and_then(|o| o.opposite);
+        }
+        for (i, edge) in edges.iter().enumerate() {
+            let Some(link) = edge.opposite else { continue };
+            let back = edges.get(link.edge).and_then(|o| o.opposite);
             if back
                 != Some(NavLink {
                     edge: i,
