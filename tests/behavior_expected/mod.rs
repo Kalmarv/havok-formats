@@ -5,6 +5,8 @@
 pub struct Expected {
     /// Distinct tagfiles.
     pub files: usize,
+    /// Binder members they were found in (copies included).
+    pub members: usize,
     /// Behaviour graph files.
     pub behaviors: usize,
     /// Character files.
@@ -68,6 +70,7 @@ pub struct Expected {
 /// sekiro: the census of its behaviour tagfiles.
 pub const SEKIRO: Expected = Expected {
     files: 305,
+    members: 315,
     behaviors: 147,
     characters: 79,
     projects: 79,
@@ -167,6 +170,7 @@ pub const SEKIRO: Expected = Expected {
 /// elden: the census of its behaviour tagfiles.
 pub const ELDEN: Expected = Expected {
     files: 1021,
+    members: 1119,
     behaviors: 461,
     characters: 280,
     projects: 280,
