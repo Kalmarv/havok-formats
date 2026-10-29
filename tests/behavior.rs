@@ -170,7 +170,7 @@ fn run(game: Game, expected: &Expected) -> Result<(), Failure> {
     let Some(dir) = resolve(corpus) else {
         return Ok(());
     };
-    let mut paths = std::fs::read_dir(dir)?
+    let mut paths = std::fs::read_dir(&dir)?
         .map(|f| f.map(|f| f.path()))
         .collect::<Result<Vec<_>, _>>()?;
     paths.sort();
@@ -179,6 +179,13 @@ fn run(game: Game, expected: &Expected) -> Result<(), Failure> {
         .filter(|p| p.extension().is_some_and(|e| e == "hkx"))
         .collect();
     expect_found(corpus, ".hkx files", paths.len());
+    // manifest.tsv: a header and one row per binder member the files were found in
+    let manifest = std::fs::read_to_string(dir.join("manifest.tsv"))?;
+    assert_eq!(
+        manifest.lines().skip(1).count(),
+        expected.members,
+        "binder members in the manifest"
+    );
     let mut found = Found::default();
     for path in &paths {
         let name = path
