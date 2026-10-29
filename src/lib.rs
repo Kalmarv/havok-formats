@@ -157,7 +157,7 @@ pub use mesh_write::{
 };
 pub use quads::{QuadCandidate, pair_quads};
 pub use simd_write::{EMPTY_BOX, SimdEncoding, SimdLeaf, build_simd_tree};
-pub use stock_tree::{Box3, StockTree};
+pub use stock_tree::{Box3, StockTree, section_numbering};
 mod tagfile;
 mod tagfile_write;
 mod types;

@@ -681,6 +681,18 @@ impl StockTree {
     }
 }
 
+/// The order in which a section holds its primitives, as the stock tool leaves it. The primitives are first numbered
+/// in the pre-order of the section's tree and are then sorted, with the stock quicksort ([`game_sort_by`]), by the index of
+/// their data run; a section names one data run, so every key is equal and what the sort does is a permutation that
+/// depends on the count alone. The result is `ranks`, where `ranks[p]` is the pre-order rank of the primitive stored at
+/// index `p`; the leaf of pre-order rank `r` carries the payload `p` for which `ranks[p] == r`. Every section tree of
+/// both installs follows it (see the engine wiki's page on Havok collision for the census).
+pub fn section_numbering(count: usize) -> Vec<usize> {
+    let mut ranks: Vec<usize> = (0..count).collect();
+    game_sort_by(&mut ranks, &|_, _| false);
+    ranks
+}
+
 #[cfg(test)]
 #[allow(
     clippy::indexing_slicing,
@@ -787,6 +799,20 @@ mod tests {
                 .copied()
                 .eq(0..u32::try_from(items.len()).unwrap())
         );
+    }
+
+    #[test]
+    fn a_sections_numbering_is_the_sort_of_equal_keys() {
+        // read off stock section trees: the payloads of their leaves in pre-order
+        assert_eq!(section_numbering(4), [2, 3, 0, 1]);
+        assert_eq!(section_numbering(6), [3, 4, 5, 0, 1, 2]);
+        assert_eq!(section_numbering(8), [5, 4, 7, 6, 1, 0, 3, 2]);
+        assert_eq!(section_numbering(10), [6, 5, 7, 9, 8, 1, 0, 2, 4, 3]);
+        for n in 0..=127 {
+            let mut ranks = section_numbering(n);
+            ranks.sort_unstable();
+            assert!(ranks.iter().copied().eq(0..n));
+        }
     }
 
     #[test]

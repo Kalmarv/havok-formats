@@ -30,7 +30,8 @@
 //! By default sections are cut by the surface-area heuristic over the primitives' boxes ([`crate::bvtree_write`] has what the
 //! stock trees show of this) and the trees over their primitives and over the sections are [`sah_shape`]s.
 //! [`Layout::Stock`] instead builds one [`StockTree`] over all the primitives and cuts it the way the stock tool does: a
-//! section's tree is its piece of it and the mesh tree the part above the sections.
+//! section's tree is its piece of it and the mesh tree the part above the sections; the primitives of a section are stored
+//! in the stock order ([`crate::section_numbering`]).
 //!
 //! The interior flags of the shape (`triangleIsInterior`) are computed from the written triangles ([`crate::interior_keys`]
 //! has the rule, which reproduces the stock flags exactly).
@@ -41,7 +42,7 @@
 //! `a c d` at the key with the half bit set; the quads are never flat (`primitiveStoresIsFlatConvex` stays 0).
 //!
 //! What is not reproduced: the exact stock trees (the stock tool built them from vertices before they were quantised,
-//! see [`StockTree`]), the stock numbering of a section's primitives, custom and extern primitives, and the connectivity. A tree of another topology is read the same way.
+//! see [`StockTree`]), custom and extern primitives, and the connectivity. A tree of another topology is read the same way.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -55,7 +56,7 @@ use crate::quads::{QuadCandidate, pair_quads};
 use crate::schema::{Schema, put_f32s, put_uint};
 use crate::simd_write::{SimdEncoding, SimdLeaf, build_simd_tree, node_bytes};
 use crate::simdtree::SimdNode;
-use crate::stock_tree::{Box3, StockTree};
+use crate::stock_tree::{Box3, StockTree, section_numbering};
 use crate::{ImageItem, ItemKind, Result, TagfileImage, Triangle, invalid};
 use primase_foundations::vertex::{packed_position32, packed_position64};
 
@@ -490,7 +491,7 @@ pub enum Layout {
     Sah,
     /// One [`StockTree`] is built over all the primitives and cut into sections ([`StockTree::cut`]); a section's tree is
     /// its piece of it, and the mesh tree the part above the sections. The sections are numbered in queue order, and
-    /// a section's primitives in the order of its tree.
+    /// a section's primitives in the stock order ([`section_numbering`]).
     Stock,
 }
 
@@ -514,6 +515,35 @@ impl Default for BuildOptions {
             drop_degenerate: None,
         }
     }
+}
+
+/// A section tree of the stock layout with its primitives numbered as the stock tool does ([`section_numbering`]): the
+/// primitive stored at index `p` is the leaf of pre-order rank `ranks[p]`, and a leaf's payload is the index it is stored at.
+fn stock_numbered(shape: &[Shape], order: &[usize]) -> (Vec<Shape>, Vec<usize>) {
+    let ranks = section_numbering(order.len());
+    let mut stored_at = vec![0u32; order.len()];
+    for (p, &rank) in ranks.iter().enumerate() {
+        if let Some(slot) = stored_at.get_mut(rank) {
+            *slot = u32::try_from(p).unwrap_or(u32::MAX);
+        }
+    }
+    let shape = shape
+        .iter()
+        .map(|node| match *node {
+            Shape::Leaf { payload } => Shape::Leaf {
+                payload: usize::try_from(payload)
+                    .ok()
+                    .and_then(|rank| stored_at.get(rank).copied())
+                    .unwrap_or(payload),
+            },
+            other => other,
+        })
+        .collect();
+    let order = ranks
+        .iter()
+        .filter_map(|&rank| order.get(rank).copied())
+        .collect();
+    (shape, order)
 }
 
 /// [`build_compressed_mesh`] with the choices of [`BuildOptions`].
@@ -772,7 +802,7 @@ pub fn build_compressed_mesh_with(source: &MeshSource<'_>, options: &BuildOption
             tri_slots.push(slots);
         }
         let (shape, order) = match stock_shapes.as_ref().and_then(|v| v.get(s)) {
-            Some((shape, order)) => (shape.clone(), order.clone()),
+            Some((shape, order)) => stock_numbered(shape, order),
             None => sah_shape(&leaf_boxes)?,
         };
         let section_domain = outward(&grown_box(&positions, r));

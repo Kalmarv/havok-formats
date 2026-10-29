@@ -96,6 +96,10 @@ rebuilt from its decoded triangles, written into its file's image and read back.
   are stock quads; for the stock pairs it makes it puts the stock first half first every time. The Sekiro object meshes
   come out lowest (86.0%). `Primitives::PairedQuads` makes the writers join the pairs into quad primitives (default
   `Triangles`: `build_compressed_mesh` is unchanged); `game_sort` is now `game_sort_by` on pairs.
+- `section_numbering` (new): the order in which a section holds its primitives. They are numbered in the pre-order of the
+  section's tree and then sorted by data-run index with the stock quicksort; every key in a section is equal, so the result is a
+  permutation of the count alone. Every section tree of the Sekiro and Elden Ring collision follows it (the leaf payloads in
+  file order, 273,137 and 720,603 trees of two leaves or more, none off); `Layout::Stock` stores primitives that way.
 - `StockTree`, `Box3`, `BuildOptions` and `Layout` (new): the tree the stock tool builds over a mesh's primitives and cuts
   into sections, read off the stock meshes. Leaves are inserted one by one into a box tree by a descent rule, listed left to
   right, rebuilt top down (32 bins per axis by the place of the centre, best of three axes by the summed surfaces from both
