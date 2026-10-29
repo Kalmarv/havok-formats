@@ -404,31 +404,15 @@ pub fn query(code: &[u8], offset: [f32; 3], scale: f32, bounds: [[f32; 3]; 2]) -
     Ok(keys)
 }
 
-/// The squared length of `(p - q) x (p - r)`.
-fn cross_squared(p: [f32; 3], q: [f32; 3], r: [f32; 3]) -> f32 {
-    let [px, py, pz] = p;
-    let [qx, qy, qz] = q;
-    let [rx, ry, rz] = r;
-    let (ux, uy, uz) = (px - qx, py - qy, pz - qz);
-    let (vx, vy, vz) = (px - rx, py - ry, pz - rz);
-    let x = uy * vz - uz * vy;
-    let y = uz * vx - ux * vz;
-    let z = ux * vy - uy * vx;
-    x * x + y * y + z * z
-}
-
-/// Whether a MOPP builder leaves the triangle `a b c` out: the squared cross product of its edges, taken from either of
-/// its first two vertices, is below `1e-7` (in `f32`). Over the 1,704 SHRED codes that cover a mesh this separates 8,755 of
-/// the 8,760 triangles the codes have no terminal for from the 637,213 they have one for (none of those is under the
-/// threshold). The other five, in three meshes, are thin triangles with a squared cross product of 6e-7 to 0.03 that the
-/// rule keeps: some other test of the builder leaves them out, and 21,986 triangles under 1e-6 keep their terminals.
-/// No threshold on the squared cross product, on it over the longest edge or the two longest edges, on the shortest edge,
-/// on the perimeter or on the cross product of the vertices quantised to the code's grid separates the five from the
-/// triangles with a terminal, and in one mesh a mirror pair of slivers (squared cross product 0.00428 and 0.00429, edges
-/// 14.29, 14.30 and 0.013 against 14.27, 14.29 and 0.013) has one left out and one kept; none of the five has a
-/// duplicate, a repeated vertex index, or a scaled mesh to explain it (the three meshes' scaling is 1).
+/// Whether a MOPP builder leaves the triangle `a b c` out: [`crate::is_degenerate_triangle`] with a threshold of `1e-7`
+/// (the squared cross product of its edges, taken from either of its first two vertices, below the threshold, or the points
+/// exactly collinear by the identity `|u|^2 |v|^2 - (u . v)^2 = 0` in `f32`, which long thin triangles reach by rounding).
+/// Over the 1,704 SHRED codes that cover a mesh this separates all 8,760 triangles the codes have no terminal for from the
+/// 637,213 they have one for (none of those passes it). The squared cross product alone separates 8,755: the other five, in
+/// three meshes, are thin triangles of 6e-7 to 0.03 that the identity calls collinear, because the rounding in it
+/// leaves exactly zero.
 pub fn is_degenerate(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> bool {
-    cross_squared(a, b, c) < DEGENERATE_CROSS_SQUARED || cross_squared(b, a, c) < DEGENERATE_CROSS_SQUARED
+    crate::degenerate::is_degenerate_triangle(a, b, c, DEGENERATE_CROSS_SQUARED)
 }
 
 /// How the terminals of a code compare with the triangles of the mesh under it ([`check_mesh`]).

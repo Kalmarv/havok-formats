@@ -48,11 +48,11 @@ packfiles, and (in fromsoft-formats) every compressed and extern mesh of the Sek
 rebuilt from its decoded triangles, written into its file's image and read back.
 
 - `mopp` (new): `walk` (the shape keys a code's terminals name and the opcodes executed), `query` (a box through the
-  code), `shape_key` / `split_shape_key`, `is_degenerate` (the squared cross product under 1e-7, which separates 8,755 of
-  the 8,760 triangles the codes leave out), `check_mesh` / `check_code` (the terminals against the triangles of the mesh
+  code), `shape_key` / `split_shape_key`, `is_degenerate` (the squared cross product under 1e-7 or exactly collinear in `f32`, which separates all
+  8,760 triangles the codes leave out), `check_mesh` / `check_code` (the terminals against the triangles of the mesh
   under the code) and `MoppWalk`, `MoppCheck`, `SUBPART_INDEX_BITS`. Every one of the 1,705 codes walks to the end with
   the 68 opcodes the command table lists (any other is refused); the terminals of the 1,704 codes over a mesh are the
-  mesh's keys without the degenerate triangles (bar five thin ones in three meshes) and name no triangle the mesh lacks;
+  mesh's keys without the degenerate triangles and name no triangle the mesh lacks;
   the query with a triangle's own box returns its key for all 637,213 triangles that have a terminal.
 - `CustomPrimitive::points` and `PointSet` (new): the decoded points of a `0x52` custom primitive (11/11/10-bit codes over
   the box of the primitive's leaf in the section tree). 27 Sekiro records (304 points) and 28 Elden Ring records

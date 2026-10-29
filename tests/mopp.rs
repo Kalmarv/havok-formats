@@ -4,7 +4,7 @@
 //!
 //! The counts are those of an independent census of the same files (a Python reader of the packfiles with its own copy of
 //! the command table, run before this code was written): every code walks to the end; the terminals of the 1,704 codes
-//! over a mesh are the mesh's shape keys without the degenerate triangles, bar five thin triangles in three meshes; no
+//! over a mesh are exactly the mesh's shape keys without the degenerate triangles; no
 //! terminal names a triangle the mesh lacks; and the query with a triangle's own box returns the triangle's key for all
 //! 637,213 triangles a code has a terminal for.
 mod inputs;
@@ -108,13 +108,13 @@ fn every_shred_mopp_code_walks_and_agrees_with_its_mesh() -> Result<(), Box<dyn 
     assert_eq!(opcodes, expected_opcodes());
     assert_eq!(triangles, 645_973);
     assert_eq!(terminals, 637_213);
-    assert_eq!(degenerate, 8_755);
+    assert_eq!(degenerate, 8_760);
     assert_eq!(unknown, 0, "terminals that name no triangle");
     assert_eq!(degenerate_with_terminal, 0, "degenerate triangles the codes keep");
-    // the five thin triangles the degenerate rule keeps and the codes leave out: DELTA 1, MIKE 1, OSCAR 3
+    // every key without a terminal is degenerate by the stock test (the five thin triangles the squared cross product alone
+    // keeps are collinear by the identity in single precision)
     let leaving: Vec<_> = omitted.iter().filter(|(_, n)| *n > 0).collect();
-    assert_eq!(leaving.iter().map(|(_, n)| n).sum::<usize>(), 5, "{leaving:?}");
-    assert_eq!(leaving.len(), 3, "{leaving:?}");
+    assert!(leaving.is_empty(), "{leaving:?}");
     assert_eq!((queries, found), (637_213, 637_213));
     Ok(())
 }
