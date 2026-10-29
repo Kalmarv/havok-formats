@@ -49,6 +49,7 @@
 )]
 use crate::bvtree::NodeWidth;
 use crate::bvtree_write::{Aabb, Shape, encode_tree, sah_shape, sah_split};
+use crate::degenerate::{DEFAULT_DEGENERATE_THRESHOLD, is_degenerate_triangle};
 use crate::interior::{MeshView, SectionView, interior_keys, primitives_of};
 use crate::quads::{QuadCandidate, pair_quads};
 use crate::schema::{Schema, put_f32s, put_uint};
@@ -143,7 +144,8 @@ pub struct BuiltMesh {
     /// The convex radius the boxes were grown by.
     pub convex_radius: f32,
     /// For each source triangle, the shape key it got (the second half of a quad has the half bit set); `None` for one left
-    /// out (a triangle with a repeated vertex, or two vertices at one position).
+    /// out (a triangle with a repeated vertex, or two vertices at one position, or a degenerate one if
+    /// [`BuildOptions::drop_degenerate`] says so).
     pub triangle_keys: Vec<Option<u32>>,
     /// The simd tree's leaves: each primitive's key (its first half) and exact vertex box.
     pub simd_leaves: Vec<SimdLeaf>,
@@ -499,6 +501,9 @@ pub struct BuildOptions {
     pub primitives: Primitives,
     /// How sections and trees are laid out.
     pub layout: Layout,
+    /// Leave out the triangles that [`is_degenerate_triangle`] calls degenerate with this threshold (the stock tool's own
+    /// is [`DEFAULT_DEGENERATE_THRESHOLD`]), on top of those with a repeated vertex. `None` keeps them.
+    pub drop_degenerate: Option<f32>,
 }
 
 impl Default for BuildOptions {
@@ -506,6 +511,7 @@ impl Default for BuildOptions {
         Self {
             primitives: Primitives::Triangles,
             layout: Layout::Sah,
+            drop_degenerate: None,
         }
     }
 }
@@ -527,6 +533,12 @@ pub fn build_compressed_mesh_with(source: &MeshSource<'_>, options: &BuildOption
         let [a, b, c] = corners;
         let (pa, pb, pc) = (vertex(verts, a)?, vertex(verts, b)?, vertex(verts, c)?);
         if a == b || b == c || a == c || pa == pb || pb == pc || pa == pc {
+            continue;
+        }
+        if options
+            .drop_degenerate
+            .is_some_and(|threshold| is_degenerate_triangle(pa, pb, pc, threshold))
+        {
             continue;
         }
         kept.push(Kept {
@@ -1547,6 +1559,7 @@ mod tests {
             &BuildOptions {
                 primitives: Primitives::PairedQuads,
                 layout: Layout::Sah,
+                drop_degenerate: None,
             },
         )
         .unwrap();

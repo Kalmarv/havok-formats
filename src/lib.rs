@@ -107,6 +107,7 @@ mod bvtree_write;
 pub mod cloth;
 pub mod constraint;
 pub mod convex;
+mod degenerate;
 mod extern_mesh;
 mod extern_write;
 mod gamesort;
@@ -139,6 +140,7 @@ pub use bvtree::{
 pub use bvtree_write::{
     Aabb, EncodedTree, MERGE_LEAVES, Shape, balanced_shape, encode_tree, sah_shape, sah_shape_with, shape_of,
 };
+pub use degenerate::{DEFAULT_DEGENERATE_THRESHOLD, is_degenerate_triangle};
 pub use extern_mesh::{ExternMesh, extern_mesh};
 pub use extern_write::{ExternSource, extern_mesh_shapes, replace_extern_mesh};
 pub use gamesort::game_sort_by;

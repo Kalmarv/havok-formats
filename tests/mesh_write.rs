@@ -437,6 +437,7 @@ fn a_mesh_laid_out_as_the_stock_tool_does_reads_back() {
     let options = BuildOptions {
         primitives: Primitives::Triangles,
         layout: havok_formats::Layout::Stock,
+        ..BuildOptions::default()
     };
     let built = build_compressed_mesh_with(
         &MeshSource {
@@ -467,6 +468,7 @@ fn triangle_pairs_are_joined_into_quads_and_read_back() {
         let options = BuildOptions {
             primitives: Primitives::PairedQuads,
             layout,
+            ..BuildOptions::default()
         };
         let built = build_compressed_mesh_with(
             &MeshSource {
@@ -489,6 +491,32 @@ fn triangle_pairs_are_joined_into_quads_and_read_back() {
         assert_eq!(built.max_key_value & 1, 1);
         written_reads_back(&built, triangles.len());
     }
+}
+
+#[test]
+fn a_degenerate_triangle_is_left_out_only_when_asked() {
+    let (mut vertices, mut triangles) = grid(2, 1.0);
+    let first = vertices.len() as u32;
+    // legs of 0.01: the squared cross product is 1e-8, under the stock tool's threshold
+    vertices.extend([[10.0, 0.0, 10.0], [10.01, 0.0, 10.0], [10.0, 0.0, 10.01]]);
+    triangles.push([first, first + 1, first + 2]);
+    let source = MeshSource {
+        vertices: &vertices,
+        triangles: &triangles,
+        convex_radius: 0.01,
+    };
+    let kept = build_compressed_mesh(&source).unwrap();
+    assert!(kept.triangle_keys.iter().all(Option::is_some));
+    let options = BuildOptions {
+        drop_degenerate: Some(havok_formats::DEFAULT_DEGENERATE_THRESHOLD),
+        ..BuildOptions::default()
+    };
+    let dropped = build_compressed_mesh_with(&source, &options).unwrap();
+    assert_eq!(dropped.triangle_keys.last(), Some(&None));
+    assert_eq!(
+        dropped.triangle_keys.iter().flatten().count(),
+        triangles.len() - 1
+    );
 }
 
 #[test]
