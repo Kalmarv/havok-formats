@@ -19,8 +19,11 @@
 //!    taken already.
 //!
 //! Where the stock tool differs: among edges that three or more triangles share, the stock pairs are not always the ones
-//! the order of the records gives; the Sekiro object meshes, which have most of those, come out at 86.0%. The stock tool
-//! numbers vertices by the index of a welded source vertex, which the stock files do not keep; positions stand for that here.
+//! the order of the records gives; the Sekiro object meshes, which have most of those, come out at 86.0%, and three of the
+//! 370 (which repeat their triangles up to 23 times, so that candidates cost exactly the same) hold 97% of the misses; the
+//! other 367 come out at 99.1%. The stock tool numbers vertices by the index of a welded source vertex, which the stock
+//! files do not keep (the indices of the source rows are local to parts of the source mesh in some meshes); positions stand
+//! for that here, in the order the triangles first use them.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
