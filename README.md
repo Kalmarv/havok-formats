@@ -81,6 +81,11 @@ Add it with `cargo add havok-formats` (or `havok-formats = "0.9"` under `[depend
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), which also says how to report a file the reader cannot read.
 
+## Check the examples
+
+From the repository root, `cargo test -p havok-formats --doc` checks the crate documentation, and
+`cargo build -p havok-formats --examples` builds its example programs. Examples that read paths need the caller's files; the repository ships no game assets.
+
 ## Licence
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
