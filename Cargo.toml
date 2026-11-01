@@ -34,7 +34,7 @@ repository = "https://github.com/Kalmarv/havok-formats"
 publish = true
 
 [workspace.dependencies]
-primase-foundations = { version = "0.3.0", git = "https://github.com/Kalmarv/primase-foundations", rev = "f9cf4ece1de77fce9d703c63347dd70b728b7c0e" }
+primase-foundations = "0.3.1"
 primase-testdata = { version = "0.1.6", git = "https://github.com/Kalmarv/primase-testdata", rev = "40acdd6a2775412cc812f67e5b3edfdc9b76c54c" }
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
 
