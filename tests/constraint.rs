@@ -1,5 +1,6 @@
 //! A synthetic `hkpRagdollConstraintData` (the class layouts follow the member names and kinds of the Sekiro and Elden
-//! Ring type tables; no game payload is embedded) read by `havok_formats::constraint`: the typed atoms, and the refusals.
+//! Ring type tables; no game payload is embedded) read by `havok_formats::constraint`: the typed atoms, the floats that
+//! are not finite, and the refusals.
 #![allow(
     clippy::unwrap_used,
     reason = "a test fixture that does not parse is the test's failure"
@@ -239,6 +240,71 @@ fn a_ragdoll_constraint_reads_its_atoms() -> Built<()> {
 }
 
 #[test]
+fn floats_that_are_not_finite_are_kept_and_named() -> Built<()> {
+    // a finite constraint names nothing
+    let bytes = fixture("hkpRagdollConstraintData", true, |_, _| {})?;
+    let tag = Tagfile::read(&bytes, None).unwrap();
+    assert_eq!(
+        read_constraint_data(tag.root().unwrap()).unwrap().non_finite(),
+        []
+    );
+    // the second frame's rotation NaN in every lane (the fourth lanes too, which are not read), as stored, a cone angle
+    // of minus infinity and a motor's tau of plus infinity
+    let nan = f32::from_bits(0xffc0_0000);
+    let bytes = fixture("hkpRagdollConstraintData", true, |layout, root| {
+        for lane in 0..12 {
+            layout.put(root + TRANSFORMS + 80 + 4 * lane, &nan.to_le_bytes());
+        }
+        layout.put(root + CONE + 8, &f32::NEG_INFINITY.to_le_bytes());
+        // the motor object follows the root, 16-aligned; its tau is 12 bytes in
+        layout.put(
+            root + SIZE.next_multiple_of(16) + 12,
+            &f32::INFINITY.to_le_bytes(),
+        );
+    })?;
+    let tag = Tagfile::read(&bytes, None).unwrap();
+    let data = read_constraint_data(tag.root().unwrap()).unwrap();
+    let ConstraintData::Ragdoll(r) = &data else {
+        panic!("not a ragdoll");
+    };
+    assert!(
+        r.transforms
+            .transform_b
+            .columns
+            .iter()
+            .flatten()
+            .all(|x| x.to_bits() == 0xffc0_0000)
+    );
+    assert_eq!(r.transforms.transform_b.translation, [0.0; 3]);
+    assert_eq!(r.cone.min_angle, f32::NEG_INFINITY);
+    let found = data.non_finite();
+    let named: Vec<_> = found
+        .iter()
+        .map(|n| (n.member.as_str(), n.lanes.iter().map(|l| l.0).collect::<Vec<_>>()))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            ("transforms.transformB", vec![0, 1, 2, 4, 5, 6, 8, 9, 10]),
+            ("ragdollMotors.motors[1].tau", vec![0]),
+            ("coneLimit.minAngle", vec![0]),
+        ]
+    );
+    assert_eq!(
+        found[2].to_string(),
+        "coneLimit.minAngle: lane 0 -inf (0xff800000)"
+    );
+    assert!(
+        found[0]
+            .to_string()
+            .starts_with("transforms.transformB: lane 0 NaN (0xffc00000) lane 1 NaN"),
+        "{}",
+        found[0]
+    );
+    Ok(())
+}
+
+#[test]
 fn an_atom_with_the_wrong_type_a_bad_flag_or_an_unknown_class_is_refused() -> Built<()> {
     // setupStabilization carries the type of a twist limit
     let bytes = fixture("hkpRagdollConstraintData", false, |layout, root| {
@@ -254,13 +320,6 @@ fn an_atom_with_the_wrong_type_a_bad_flag_or_an_unknown_class_is_refused() -> Bu
     let tag = Tagfile::read(&bytes, None).unwrap();
     let e = read_constraint_data(tag.root().unwrap()).unwrap_err().to_string();
     assert!(e.contains("isEnabled is 2, not a flag"), "{e}");
-    // a NaN angle
-    let bytes = fixture("hkpRagdollConstraintData", false, |layout, root| {
-        layout.put(root + CONE + 8, &f32::NAN.to_le_bytes());
-    })?;
-    let tag = Tagfile::read(&bytes, None).unwrap();
-    let e = read_constraint_data(tag.root().unwrap()).unwrap_err().to_string();
-    assert!(e.contains("minAngle is not a number"), "{e}");
     // a class with no reader
     let bytes = fixture("hkpPrismaticConstraintData", false, |_, _| {})?;
     let tag = Tagfile::read(&bytes, None).unwrap();

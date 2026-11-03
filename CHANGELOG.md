@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Constraints keep their floats as stored.
+
+- Breaking: `constraint::read_constraint_data` no longer refuses a float member that holds a NaN; every float is the
+  value stored, NaN and infinities included. `ConstraintData::non_finite` lists the members that are not finite, each
+  as a `constraint::NonFinite` (the member's path by the stored names, and every lane that is not finite with its
+  value; its `Display` says NaN, +inf or -inf with the bits). Of the 2,499 Sekiro and 11,783 Elden Ring constraint
+  data objects of the installs (the DLC's included), one holds such members and none an infinity: in the Elden Ring
+  DLC's `chr/c5320.chrbnd.dcx`, a ragdoll joint's `transformB` rotation and `ragdollMotors.target_bRca` are NaN in all
+  twelve stored lanes each. The refusal that read "holds a number that is not one" for a NaN is gone.
+
 ## 0.9.0 (2026-10-29)
 
 Navigation: `navmesh` reads the Havok AI objects of the games' navmesh binders (`*.nvmhktbnd.dcx`), checked on the 1,509

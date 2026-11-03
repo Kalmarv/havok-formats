@@ -8,12 +8,19 @@
 //! `transforms`, `23` for `setupStabilization`, `19` for `ragdollMotors`, `17` for `angFriction`, `15` for `twistLimit`,
 //! `16` for `coneLimit` and `planesLimit`, `5` for `ballSocket`, `18` for `angMotor`, `14` for `angLimit`, `12` for
 //! `2dAng`, `3` for `pivots`, `24` for `ang`, `4` for `steeringBase`, `7` for `lin1` and `lin2`, `8` for `lin0Soft` and `9`
-//! for `lin0Limit`), the values every one of the 2,499 Sekiro and 7,934 Elden Ring constraint data objects of the
-//! installs hold (each tagfile counted as often as a binder repeats it). Their integer members are constant per class
-//! in both games (a census over all of them): every `isEnabled` is 1 but the motors', every motor pointer is set or
-//! null, the axes are fixed per slot (`twistAxis` 0, `refAxis` 1, the cone's `refAxisInB` 0 and the planes limit's 1, a
-//! hinge's `limitAxis` 0 and `cosineAxis` 1) and `velocityStabilizationFactor` is 48. Beyond that the values are the
+//! for `lin0Limit`), the values every one of the 2,499 Sekiro and 11,783 Elden Ring constraint data objects of the
+//! installs hold (7,934 before the Shadow of the Erdtree DLC; each tagfile counted as often as a binder repeats it).
+//! Their integer members are constant per class in both games (a census over all of them): every `isEnabled` is 1 but
+//! the motors', every motor pointer is set or null, the axes are fixed per slot (`twistAxis` 0, `refAxis` 1, the cone's
+//! `refAxisInB` 0 and the planes limit's 1, a hinge's `limitAxis` 0 and `cosineAxis` 1) and
+//! `velocityStabilizationFactor` is 48. Beyond that the values are the
 //! file's: the angles are radians, an axis is the index of a column of the frame.
+//!
+//! Every float member is read as stored, NaN and infinities included: [`ConstraintData::non_finite`] names the members
+//! and lanes that are not finite. Of the constraint data objects of both installs, one holds such members and none holds
+//! an infinity: in the Elden Ring Shadow of the Erdtree DLC's `c5320.hkx` (in `chr/c5320.chrbnd.dcx`), a ragdoll joint
+//! whose `transformB` rotation and `ragdollMotors.target_bRca` are NaN (`0xffc00000`) in all twelve stored lanes each,
+//! the translation and every other float finite.
 //!
 //! The same classes in the Havok 7.1.0-r1 packfiles of Tony Hawk's SHRED (the ragdolls' hinge and cone joints, and the
 //! breakable hinges of a level) have other members and other atom numbers; [`packfile`] reads those, together with the
@@ -32,7 +39,7 @@ use crate::{Result, Value, invalid};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform {
     /// The rotation's columns (the images of the x, y and z axes). Orthonormal and right-handed in every stored
-    /// transform (the worst error of a column's length or of two columns' dot product is 1.2e-6).
+    /// transform that is finite (the worst error of a column's length or of two columns' dot product is 1.2e-6).
     pub columns: [[f32; 3]; 3],
     /// The translation.
     pub translation: [f32; 3],
@@ -321,6 +328,214 @@ pub enum ConstraintData {
     },
 }
 
+/// A float member of a constraint that holds values that are not finite, as [`ConstraintData::non_finite`] lists them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonFinite {
+    /// The member's path by the names the classes store: the atom, then the member (`transforms.transformB`,
+    /// `ragdollMotors.motors[1].tau`); a member of the constraint a breakable one wraps starts with `constraintData.`.
+    pub member: String,
+    /// Each lane that is not finite, with its value. A lane is a float's index in the stored member: an `hkTransform`'s
+    /// rotation columns are lanes 0 to 2, 4 to 6 and 8 to 10 and its translation 12 to 14 (the fourth lanes are not
+    /// read); a single float is lane 0.
+    pub lanes: Vec<(usize, f32)>,
+}
+
+impl std::fmt::Display for NonFinite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:", self.member)?;
+        for (lane, x) in &self.lanes {
+            let what = if x.is_nan() {
+                "NaN"
+            } else if *x > 0.0 {
+                "+inf"
+            } else {
+                "-inf"
+            };
+            write!(f, " lane {lane} {what} ({:#010x})", x.to_bits())?;
+        }
+        Ok(())
+    }
+}
+
+/// The lanes of an `hkTransform`'s rotation columns, and of its translation.
+const COLUMN_LANES: [[usize; 3]; 3] = [[0, 1, 2], [4, 5, 6], [8, 9, 10]];
+const TRANSLATION_LANES: [usize; 3] = [12, 13, 14];
+
+/// Collects the members that are not finite, their paths under `prefix`.
+struct Scan {
+    prefix: &'static str,
+    found: Vec<NonFinite>,
+}
+
+impl Scan {
+    fn lanes(&mut self, member: &str, lanes: impl IntoIterator<Item = (usize, f32)>) {
+        let lanes: Vec<_> = lanes.into_iter().filter(|(_, x)| !x.is_finite()).collect();
+        if !lanes.is_empty() {
+            self.found.push(NonFinite {
+                member: format!("{}{member}", self.prefix),
+                lanes,
+            });
+        }
+    }
+
+    fn real(&mut self, member: &str, x: f32) {
+        self.lanes(member, [(0, x)]);
+    }
+
+    fn vector<const N: usize>(&mut self, member: &str, x: &[f32; N]) {
+        self.lanes(member, x.iter().copied().enumerate());
+    }
+
+    fn transform(&mut self, member: &str, t: &Transform) {
+        let rotation = COLUMN_LANES
+            .iter()
+            .zip(&t.columns)
+            .flat_map(|(lanes, column)| lanes.iter().copied().zip(column.iter().copied()));
+        let translation = TRANSLATION_LANES
+            .iter()
+            .copied()
+            .zip(t.translation.iter().copied());
+        self.lanes(member, rotation.chain(translation));
+    }
+
+    fn local_transforms(&mut self, atom: &str, t: &LocalTransforms) {
+        self.transform(&format!("{atom}.transformA"), &t.transform_a);
+        self.transform(&format!("{atom}.transformB"), &t.transform_b);
+    }
+
+    fn setup_stabilization(&mut self, a: &SetupStabilization) {
+        self.real("setupStabilization.maxLinImpulse", a.max_lin_impulse);
+        self.real("setupStabilization.maxAngImpulse", a.max_ang_impulse);
+        self.real("setupStabilization.maxAngle", a.max_angle);
+    }
+
+    fn ball_socket(&mut self, a: &BallSocket) {
+        self.real("ballSocket.breachImpulse", a.breach_impulse);
+        self.real(
+            "ballSocket.inertiaStabilizationFactor",
+            a.inertia_stabilization_factor,
+        );
+    }
+
+    /// A limit atom's angles and factors: `minAngle`, `maxAngle`, `angularLimitsTauFactor`, `angularLimitsDampFactor`.
+    fn limit(&mut self, atom: &str, [min, max, tau, damp]: [f32; 4]) {
+        self.real(&format!("{atom}.minAngle"), min);
+        self.real(&format!("{atom}.maxAngle"), max);
+        self.real(&format!("{atom}.angularLimitsTauFactor"), tau);
+        self.real(&format!("{atom}.angularLimitsDampFactor"), damp);
+    }
+
+    fn motor(&mut self, slot: &str, motor: Option<&PositionMotor>) {
+        let Some(m) = motor else { return };
+        self.real(&format!("{slot}.minForce"), m.min_force);
+        self.real(&format!("{slot}.maxForce"), m.max_force);
+        self.real(&format!("{slot}.tau"), m.tau);
+        self.real(&format!("{slot}.damping"), m.damping);
+        self.real(
+            &format!("{slot}.proportionalRecoveryVelocity"),
+            m.proportional_recovery_velocity,
+        );
+        self.real(
+            &format!("{slot}.constantRecoveryVelocity"),
+            m.constant_recovery_velocity,
+        );
+    }
+
+    fn data(&mut self, data: &ConstraintData) {
+        match data {
+            ConstraintData::Ragdoll(r) => {
+                self.local_transforms("transforms", &r.transforms);
+                self.setup_stabilization(&r.setup_stabilization);
+                self.vector("ragdollMotors.target_bRca", &r.motors.target_b_rca);
+                let slots = [
+                    "ragdollMotors.motors[0]",
+                    "ragdollMotors.motors[1]",
+                    "ragdollMotors.motors[2]",
+                ];
+                for (slot, m) in slots.into_iter().zip(&r.motors.motors) {
+                    self.motor(slot, m.as_ref());
+                }
+                self.real("angFriction.maxFrictionTorque", r.friction.max_friction_torque);
+                let t = &r.twist;
+                self.limit(
+                    "twistLimit",
+                    [t.min_angle, t.max_angle, t.tau_factor, t.damp_factor],
+                );
+                for (atom, c) in [("coneLimit", &r.cone), ("planesLimit", &r.planes)] {
+                    self.limit(atom, [c.min_angle, c.max_angle, c.tau_factor, c.damp_factor]);
+                }
+                self.ball_socket(&r.ball_socket);
+            }
+            ConstraintData::LimitedHinge(h) => {
+                self.local_transforms("transforms", &h.transforms);
+                self.setup_stabilization(&h.setup_stabilization);
+                self.real("angMotor.targetAngle", h.motor.target_angle);
+                self.motor("angMotor.motor", h.motor.motor.as_ref());
+                self.real("angFriction.maxFrictionTorque", h.friction.max_friction_torque);
+                let l = &h.limit;
+                self.limit(
+                    "angLimit",
+                    [l.min_angle, l.max_angle, l.tau_factor, l.damp_factor],
+                );
+                self.ball_socket(&h.ball_socket);
+            }
+            ConstraintData::Hinge(h) => {
+                self.local_transforms("transforms", &h.transforms);
+                self.setup_stabilization(&h.setup_stabilization);
+                self.ball_socket(&h.ball_socket);
+            }
+            ConstraintData::BallAndSocket(b) => {
+                self.vector("pivots.translationA", &b.translation_a);
+                self.vector("pivots.translationB", &b.translation_b);
+                self.setup_stabilization(&b.setup_stabilization);
+                self.ball_socket(&b.ball_socket);
+            }
+            ConstraintData::Fixed(x) => {
+                self.local_transforms("transforms", &x.transforms);
+                self.setup_stabilization(&x.setup_stabilization);
+                self.ball_socket(&x.ball_socket);
+            }
+            ConstraintData::Wheel(w) => {
+                self.local_transforms("suspensionBase", &w.suspension_base);
+                self.real("lin0Limit.min", w.suspension_min);
+                self.real("lin0Limit.max", w.suspension_max);
+                self.real("lin0Soft.tau", w.suspension_tau);
+                self.real("lin0Soft.damping", w.suspension_damping);
+                self.vector("steeringBase.rotationA", &w.steering_rotation_a);
+                self.vector("steeringBase.rotationB", &w.steering_rotation_b);
+                self.vector("initialAxleInB", &w.initial_axle_in_b);
+                self.vector("initialSteeringAxisInB", &w.initial_steering_axis_in_b);
+            }
+            ConstraintData::Breakable {
+                constraint,
+                threshold,
+            } => {
+                let mut inner = Scan {
+                    prefix: "constraintData.",
+                    found: Vec::new(),
+                };
+                inner.data(constraint);
+                self.found.append(&mut inner.found);
+                self.real("threshold", *threshold);
+            }
+        }
+    }
+}
+
+impl ConstraintData {
+    /// The float members that hold a NaN or an infinity, each with the lanes that do; empty when every float the
+    /// reader keeps is finite.
+    #[must_use]
+    pub fn non_finite(&self) -> Vec<NonFinite> {
+        let mut scan = Scan {
+            prefix: "",
+            found: Vec::new(),
+        };
+        scan.data(self);
+        scan.found
+    }
+}
+
 /// An unsigned member that fits a byte.
 fn byte(v: Value<'_, '_>, name: &str) -> Result<u8> {
     let field = v.field(name)?;
@@ -337,14 +552,9 @@ fn flag(v: Value<'_, '_>, name: &str) -> Result<bool> {
     }
 }
 
-/// A float member; the fourth lane or a limit may be a huge value, but a NaN is refused.
+/// A float member, as stored.
 fn real(v: Value<'_, '_>, name: &str) -> Result<f32> {
-    let field = v.field(name)?;
-    let x = field.float()?;
-    if x.is_nan() {
-        return Err(invalid(field.at(), format!("{name} is not a number")));
-    }
-    Ok(x)
+    v.field(name)?.float()
 }
 
 /// The atom `name` of `atoms`, refused unless its `type` is `want`.
@@ -360,17 +570,9 @@ fn atom<'t, 'a>(atoms: Value<'t, 'a>, name: &str, want: u64) -> Result<Value<'t,
     Ok(atom)
 }
 
-/// A member of `n` floats, none a NaN.
+/// A member of `n` floats, as stored.
 fn floats<const N: usize>(v: Value<'_, '_>, name: &str) -> Result<[f32; N]> {
-    let field = v.field(name)?;
-    let x = field.vector::<N>()?;
-    if x.iter().any(|f| f.is_nan()) {
-        return Err(invalid(
-            field.at(),
-            format!("{name} holds a number that is not one"),
-        ));
-    }
-    Ok(x)
+    v.field(name)?.vector::<N>()
 }
 
 /// The rotation columns and translation of an `hkTransform` (16 floats).
@@ -519,9 +721,10 @@ fn free_rotation_axis(atoms: Value<'_, '_>) -> Result<u8> {
 
 /// Read the constraint data object `data` (the target of an `hknpConstraintCinfo`'s `constraintData`).
 ///
-/// Refused: a class that is not one of the seven above, an atom whose `type` is not the rule of its slot, a flag that is
-/// not 0 or 1, a number that is not one, a motor that is not an `hkpPositionConstraintMotor`, a breakable constraint that
-/// wraps another breakable one. Every one of the constraint data objects of the Sekiro and Elden Ring installs reads.
+/// The floats are the values stored, finite or not ([`ConstraintData::non_finite`] lists those that are not). Refused: a
+/// class that is not one of the seven above, an atom whose `type` is not the rule of its slot, a flag that is not 0 or 1,
+/// a motor that is not an `hkpPositionConstraintMotor`, a breakable constraint that wraps another breakable one. Every
+/// one of the constraint data objects of the Sekiro and Elden Ring installs reads.
 pub fn read_constraint_data(data: Value<'_, '_>) -> Result<ConstraintData> {
     read_at(data, 0)
 }
