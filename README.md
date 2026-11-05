@@ -1,28 +1,40 @@
 # havok-formats
 
-A Rust library that reads Havok physics and animation data as games store it: tagfiles (`.hkx`) and packfiles, and the collision meshes, convex shapes, cloth, ragdolls, skeletons and spline-compressed animations inside them. Every read is bounds-checked, so untrusted files produce errors, not panics.
+A Rust library that reads and writes Havok physics and animation files (`.hkx` tagfiles and packfiles) as games ship them. It was written against the files of Sekiro, Elden Ring and Tony Hawk's SHRED (PS3), and contains no Havok SDK code.
 
-## What it reads
+## Features
 
-- **Tagfiles** (`TAG0`), SDK versions **2015.1**, **2016.2** and **2018.1**, and their external type compendia (`TCM0`). Class layouts come from each file's own type metadata, so any class can be read field by field.
-- **Packfiles** (the older `0x57E0E057 0x10C0C010` container), version 7, contents version `Havok-7.1.0-r1`, 4-byte pointers, big endian; versions 9 and 11, contents versions `hk_2013.1.0-r1` and `hk_2014.1.0-r1`, 8-byte pointers, little endian. `Packfile::image` and `PackfileImage::write` write them back byte for byte, and `packfile::reflection` reads the class metadata a file carries and checks it against the signatures the file stores.
-- **Objects**, read by class from those files:
-  - `hknp` compressed meshes (triangles, dead primitives, custom primitives, extern shape instances, and the bounding-volume trees of the mesh, of each section and the four-lane simd tree, decoded and checked as they are read), extern triangle meshes (`hknpExternMeshShape` over `hkGeometry`) and convex shapes;
-  - navigation meshes (`hkaiNavMesh`: faces, edges with their opposites and user edges, vertices, ear-clipped triangles), Sekiro's cluster graphs (`hkaiDirectedGraphExplicitCost`), Elden Ring's 6-byte query trees and the user-edge setups, as `navmesh`;
-  - cloth (the whole `hclClothData`: sim cloths with their particles, rest poses, constraint sets of every kind the games use, collidables and shapes, and the buffers, transform sets, operators and states around them), ragdoll data and constraint descriptions;
-  - skeletons, animation bindings and animation containers, and `hkaSplineCompressedAnimation` decoded to bone transforms at a time;
-  - behaviour tagfiles (`behavior`): typed views of the 93 `hkb*` and `Custom*` classes in Sekiro's and Elden Ring's `behbnd` binders, behaviour graphs with their variables, events and bindings by name, characters and projects;
-  - 7.1 `hkp` rigid bodies and collision shapes in packfiles (rigid body, MOPP tree, storage extended mesh, convex vertices, box, sphere, capsule, cylinder, convex translate, list).
-  - 7.1 `hkp` rigid bodies and collision shapes in packfiles (rigid body, MOPP tree, storage extended mesh, convex vertices, box, sphere, capsule, cylinder, convex translate, list), and a walker and box query for their MOPP code (`mopp`);
-  - the convex point sets of custom mesh primitives, and the typed atoms of ragdoll, hinge, ball and socket, fixed and wheel constraints (`constraint`).
-- **Collision written from triangles**: `build_compressed_mesh` and `replace_compressed_mesh` rebuild the mesh tree of an `hknp` compressed mesh (sections, packed and shared vertices, the trees, the simd tree) and write it into a tagfile image; `replace_extern_mesh` rewrites an extern mesh. The stock file layout is read from the file's type table, so both SDK layouts work. Trees are built by `sah_shape` (surface-area splits, a bottom-up merge below 17 leaves, the larger child first), which follows what the stock trees show but does not reproduce them. The shape's interior flags (`triangleIsInterior`) are computed too (`interior_keys`), and reproduce the stock flags exactly. `build_compressed_mesh_with(.., Primitives::PairedQuads)` also joins the triangle pairs the stock tool joins (`pair_quads`) into quad primitives; it makes 99% of the stock quads; `Layout::Stock` lays sections and trees out by `StockTree`, which follows the stock tool's tree and cut (exactly for a fifth to a third of the meshes with several sections).
-  - the convex point sets of custom mesh primitives, and the typed atoms of ragdoll, hinge, ball and socket, fixed and wheel constraints (`constraint`), and those of SHRED's 7.1 packfiles with their physics systems and instances (`constraint::packfile`).
-- **Collision written from triangles**: `build_compressed_mesh` and `replace_compressed_mesh` rebuild the mesh tree of an `hknp` compressed mesh (sections, packed and shared vertices, the trees, the simd tree) and write it into a tagfile image; `replace_extern_mesh` rewrites an extern mesh. The stock file layout is read from the file's type table, so both SDK layouts work.
-- **Names for numbers**: the enumerated members the files store (`enums`: `hkp` motion, response, broad-phase, welding, striding, subpart and MOPP build types; `hka` blend hints and reference frames; `hknp` motion and shape types; `hcl` shape types and platforms), the member declaration flags (`DeclFlags`: protected, private, not serialisable) and the mesh-tree section flags (`SectionFlags`), each checked against censuses of the games' files.
+- Reads tagfiles (`TAG0`) of SDK 2015.1, 2016.2 and 2018.1 and their shared type compendia (`TCM0`), with any class readable field by field from the file's own type table
+- Reads packfiles of version 7 (`Havok-7.1.0-r1`, big endian) and versions 9 and 11 (`hk_2013.1.0-r1`, `hk_2014.1.0-r1`), and the class metadata some of them carry
+- Writes tagfiles and packfiles back, byte for byte when unedited
+- Decodes `hknp` compressed collision meshes with their bounding-volume trees, extern triangle meshes and convex shapes
+- Builds compressed and extern collision meshes from triangles and writes them into a tagfile
+- Reads cloth data (`hclClothData`), ragdolls and the typed atoms of ragdoll, hinge, ball and socket, fixed and wheel constraints
+- Reads skeletons, animation bindings and animation containers
+- Decodes, samples and encodes `hkaSplineCompressedAnimation`, and writes an animation back into its file
+- Reads Havok AI navigation meshes, Sekiro's cluster graphs and Elden Ring's query trees, and triangulates their faces
+- Reads Havok Behavior files through typed views of the 93 `hkb*` and `Custom*` classes in Sekiro's and Elden Ring's behaviour binders
+- Reads Havok 7.1 `hkp` rigid bodies, collision shapes, constraints and MOPP code from packfiles
+- Writes a tagfile's objects as Havok's XML (`hktagfile` version 3) and lists the differences between two readings
+- Names the enumerated values and flags the files store as numbers
+- Bounds-checks every read: bad input gives an `Error` naming the byte offset, never a panic
+- Refuses unknown versions, sections, flags and classes by name instead of guessing
 
-It was written against Sekiro (tagfiles, 2016.2; packfiles, versions 9 and 11), Elden Ring (tagfiles, 2018.1; packfiles, versions 9 and 11) and Tony Hawk's SHRED for PS3 (packfiles, version 7). It is an independent reader of the stored formats: it contains no Havok SDK code, and its knowledge of the layouts comes from the files themselves and from public documentation and open-source readers.
+## Getting Started
 
-## Example
+### Requirements
+
+Rust 1.99 or later (edition 2024). The library takes bytes, not paths, so reading files and archives is up to the caller.
+
+### Installation
+
+```sh
+cargo add havok-formats
+```
+
+### Usage
+
+Print the triangle count of each collision mesh in a Sekiro map collision tagfile whose types are in a shared compendium:
 
 ```rust
 use havok_formats::{Compendium, Tagfile, compressed_mesh};
@@ -49,45 +61,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The same code is the compile-checked doc test of the crate documentation, and, taking its file names from the command line, `examples/triangles.rs` (`cargo run --example triangles -- collision.hkx shared.compendium`).
+A file the reader refuses says where and why:
 
-## What it guarantees
-
-- **Checked reads.** Every read is bounds-checked. Data that is shorter than it says, refers outside itself, or holds something the reader does not know is an `Error` carrying the byte offset and what was wrong (`Havok at 0x0: section length is less than its header`), not a panic. Truncating a tagfile at every length is covered by a test.
-- **Refusals instead of guesses.** Unknown sections, SDK versions, type flags, packfile versions and layout rules are refused by name. A class or field the file does not have is an error naming it, never a default. Inheritance cycles among types, item and patch references outside the data, and fixups that point outside the data are refused.
-- **No recursion on file data.** Object graphs are views over the borrowed bytes; references are resolved on demand, so cyclic graphs cannot overflow the stack.
-- **Stored values stay as stored.** Integers keep their bits and non-finite floats in unused SIMD lanes are preserved; geometry readers reject non-finite coordinates they use.
-
-## What it does not do
-
-- It writes tagfiles (`TagfileImage::write`: the type table as read, the items renumbered and laid out as the game's own files are) and packfiles (`PackfileImage::write`, the same), and it does not simulate: no physics, cloth solver or animation blending.
-- It is not a complete validator: it checks the values its accessors read, not every unused byte of a file.
-- Tagfiles of other SDK versions, packfiles of versions other than 7, 9 and 11, big-endian spline animations and ones with more than one float track, and Havok classes without a reader here are refused or left unread (every class of the 490 SHRED packfiles has a view).
-- Material meanings and coordinate-system conversions are left to the caller: it returns what the file stores.
-
-## Tests
-
-```sh
-cargo test --workspace
+```rust
+let error = havok_formats::Tagfile::read(b"\0\0\0\x07TAG0", None).unwrap_err();
+assert_eq!(error.to_string(), "Havok at 0x0: section length is less than its header");
 ```
 
-runs the unit tests, the hand-built fixtures (tagfile and packfile records written byte by byte, including every truncated prefix of a tagfile) and the doc tests. They need no game files.
+The same program ships as an example, taking its paths from the command line:
 
-One test reads real data: `tests/corpus.rs` reads every tagfile and the compendium of a Sekiro area's map collision and decodes every compressed mesh in them. It needs your own copy of those files, and skips with one line naming what is missing when they are not configured. Point the `GAME_DATA` environment variable at a TOML file naming where your installs, keys, tools and extracted file sets are (the layout and a sample are in [primase-testdata](https://github.com/Kalmarv/primase-testdata)); [tests/inputs/README.md](tests/inputs/README.md) lists exactly which inputs this crate's tests read, what each is and where it comes from. No game files are included in this repository or needed to build it.
+```sh
+cargo run --example triangles -- collision.hkx shared.compendium
+```
 
-Add it with `cargo add havok-formats` (or `havok-formats = "0.9"` under `[dependencies]`). Building needs Rust 1.99 (edition 2024). The crate depends on [primase-foundations](https://github.com/Kalmarv/primase-foundations) (byte cursors and vertex unpacking) and, for tests only, primase-testdata.
+Other entry points: `animation::container` and `spline::SplineAnimation` for animation, `cloth::read` for cloth and ragdolls, `navmesh::nav_data` for navigation meshes, `behavior::Document` for behaviour files, `packfile::Packfile` for packfiles, and `xml::objects` for the XML form. The [API documentation](https://docs.rs/havok-formats) covers every module.
 
-## Contributing
+`cargo test --workspace` runs the unit tests, the hand-built fixtures and the doc tests without any game files. The real-data tests read your own copies of game files through the `GAME_DATA` configuration described in [primase-testdata](https://github.com/Kalmarv/primase-testdata), and skip when it is not set; [tests/inputs/README.md](tests/inputs/README.md) lists each input. No game files are included in the repository.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), which also says how to report a file the reader cannot read.
-
-## Check the examples
-
-From the repository root, `cargo test -p havok-formats --doc` checks the crate documentation, and
-`cargo build -p havok-formats --examples` builds its example programs. Examples that read paths need the caller's files; the repository ships no game assets.
-
-## Licence
-
-GPL-3.0-or-later. See [LICENSE](LICENSE).
-
-Used by [primase](https://github.com/Kalmarv/primase), a game-asset conversion library.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks CI runs and how to report a file the reader cannot read. Licensed under GPL-3.0-or-later.
