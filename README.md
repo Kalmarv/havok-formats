@@ -1,5 +1,7 @@
 # havok-formats
 
+[![crates.io: havok-formats](https://img.shields.io/crates/v/havok-formats?label=havok-formats)](https://crates.io/crates/havok-formats) [![docs.rs](https://img.shields.io/docsrs/havok-formats)](https://docs.rs/havok-formats) [![CI](https://img.shields.io/github/actions/workflow/status/Kalmarv/havok-formats/ci.yml?branch=main&label=CI)](https://github.com/Kalmarv/havok-formats/actions/workflows/ci.yml)
+
 A Rust library that reads and writes Havok physics and animation files (`.hkx` tagfiles and packfiles) as games ship them. It was written against the files of Sekiro, Elden Ring and Tony Hawk's SHRED (PS3), and contains no Havok SDK code.
 
 ## Features
