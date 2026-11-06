@@ -35,7 +35,7 @@ publish = true
 
 [workspace.dependencies]
 primase-foundations = "0.3.1"
-primase-testdata = { version = "0.1.6", git = "https://github.com/Kalmarv/primase-testdata", rev = "fe402dbf2b2a36a6cf0a6dc4b5df7137c7465db7" }
+primase-testdata = "0.1.8"
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]

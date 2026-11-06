@@ -619,7 +619,7 @@ fn merge_leaves(boxes: &[Aabb], items: &[usize], hier: &mut Vec<Joined>) -> usiz
 }
 
 /// A shape for the boxes `boxes` that is cheap to walk: a node of more than [`MERGE_LEAVES`] leaves is split by
-/// [`sah_split`] (the surface-area heuristic over the three axes), a node of that many or fewer has its leaves merged
+/// the surface-area heuristic over the three axes, a node of that many or fewer has its leaves merged
 /// from the bottom, always the two nodes whose union has the least surface, and in every node the child with the larger
 /// box is the first (of two boxes of one surface, the child with more leaves). Leaf payloads count up in pre-order, so the leaf of payload `k` is the `k`-th leaf. Returns the shape
 /// and, for each payload, the index of the box it stands for.
