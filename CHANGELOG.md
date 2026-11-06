@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 (2026-11-06)
 
 Constraints keep their floats as stored.
 
